@@ -1,0 +1,210 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#12345a">
+  <title>UCB Events</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <link rel="icon" href="icono-192.png">
+  <link rel="apple-touch-icon" href="icono-192.png">
+  <link rel="stylesheet" href="lib/leaflet.css">
+  <link rel="stylesheet" href="lib/maplibre-gl.css">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <!-- ================= BARRA SUPERIOR ================= -->
+  <header class="topbar">
+    <div class="brand"><span class="brand-mark">U</span><div><strong>UCB EVENTS</strong><small>Tu campus, siempre conectado</small></div></div>
+    <div class="topbar-right">
+      <span class="prototype">PROTOTIPO</span>
+      <button id="chip-sesion" class="chip" type="button">👤 Visitante</button>
+      <button id="btn-menu" class="menu-btn" type="button" aria-label="Abrir menú" aria-expanded="false">☰<span id="badge-menu" class="dot hidden"></span></button>
+    </div>
+  </header>
+
+  <!-- ================= MENÚ DESPLEGABLE ================= -->
+  <div id="velo" class="velo hidden"></div>
+  <nav id="menu" class="menu" aria-label="Menú principal" aria-hidden="true">
+    <div class="menu-head">
+      <div><p class="eyebrow">SESIÓN</p><b id="menu-nombre">Visitante</b><small id="menu-rol" class="muted">Sin cuenta</small></div>
+      <button id="btn-cerrar-menu" class="secondary" type="button" aria-label="Cerrar menú">✕</button>
+    </div>
+    <div id="menu-sesion" class="menu-sesion"></div>
+    <p class="eyebrow">NAVEGACIÓN</p>
+    <button class="menu-item" data-ir="events">📅 Eventos</button>
+    <button class="menu-item" data-ir="map">🗺️ Mapa y rutas</button>
+    <button class="menu-item" data-ir="horario">🎓 Mi horario</button>
+    <button class="menu-item" data-ir="avisos">🔔 Avisos <span id="badge-avisos" class="num"></span></button>
+    <button class="menu-item" id="menu-asistencia">✅ Registrar asistencia (código)</button>
+    <button class="menu-item" data-ir="organizer">🛠️ Solo organizadores</button>
+    <button class="menu-item hidden" id="menu-admin" data-ir="admin">🔐 Administración</button>
+    <p class="eyebrow">ACCESIBILIDAD</p>
+    <label class="menu-check"><input type="checkbox" id="chk-accesible"> ♿ Usar siempre rutas sin gradas</label>
+    <p class="eyebrow">APP</p>
+    <button class="menu-item hidden" id="btn-instalar">📲 Instalar como app</button>
+    <button class="menu-item" id="menu-acerca">ℹ️ Acerca de UCB Events</button>
+  </nav>
+
+  <main class="container">
+    <section class="hero">
+      <div><p class="eyebrow">COMUNIDAD UNIVERSITARIA</p><h1>Encuentra lo que<br><span>está pasando.</span></h1>
+      <p class="hero-copy">Descubre eventos, ubícalos en el campus y llega por la ruta más corta, también sin gradas.</p></div>
+      <div class="hero-icon">📍</div>
+    </section>
+
+    <nav class="tabs" aria-label="Secciones">
+      <button class="tab active" data-tab="events">Eventos</button>
+      <button class="tab" data-tab="map">Mapa y rutas</button>
+      <button class="tab" data-tab="horario">Mi horario</button>
+      <button class="tab" data-tab="organizer">Solo organizadores</button>
+    </nav>
+
+    <!-- ================= EVENTOS ================= -->
+    <section id="events" class="panel">
+      <div class="section-heading"><div><p class="eyebrow">AGENDA UCB</p><h2>Próximos eventos</h2></div><span id="event-count" class="count"></span></div>
+      <div class="filters">
+        <input id="search" type="search" placeholder="Buscar un evento o lugar..." aria-label="Buscar evento">
+        <select id="category" aria-label="Filtrar por categoría"><option value="">Todas las categorías</option><option>Académico</option><option>Cultural</option><option>Deportivo</option><option>Social</option></select>
+        <select id="date-filter" aria-label="Filtrar por fecha"><option value="upcoming">Próximos y de hoy</option><option value="all">Todos los eventos</option><option value="past">Eventos pasados</option></select>
+      </div>
+      <div id="event-list" class="event-grid"></div>
+    </section>
+
+    <!-- ================= MAPA Y RUTAS ================= -->
+    <section id="map" class="panel hidden">
+      <div class="section-heading">
+        <div><p class="eyebrow">ORIENTACIÓN EN EL CAMPUS</p><h2>Mapa y rutas</h2></div>
+        <div class="seg" role="group" aria-label="Vista del mapa">
+          <button class="seg-btn active" data-vista="osm" type="button">Mapa</button>
+          <button class="seg-btn" data-vista="plano" type="button">Plano UCB</button>
+        </div>
+      </div>
+      <div class="map-layout">
+        <div>
+          <div id="mapa" class="mapa-osm"></div>
+          <div id="plano" class="campus-map-wrap hidden">
+            <img class="campus-map-image" src="plano-campus.png" alt="Plano del campus UCB La Paz">
+            <svg id="plano-svg" viewBox="0 0 643 490" preserveAspectRatio="none" aria-hidden="true"></svg>
+            <div id="plano-pins"></div>
+          </div>
+          <p class="muted leyenda"><i class="l camino"></i>camino <i class="l rampa"></i>rampa <i class="l escalera"></i>gradas <i class="l ascensor"></i>ascensor · 🚻 baño · <a href="mapa-campus-completo.png" target="_blank" rel="noopener">plano completo</a></p>
+        </div>
+        <aside class="route-box">
+          <h3>Cómo llegar</h3>
+          <label>¿Dónde estás?<select id="from"></select></label>
+          <button id="btn-gps" class="secondary full-sm" type="button">📍 Usar mi ubicación</button>
+          <label>¿A dónde vas?<select id="to"></select></label>
+          <div class="modos" role="radiogroup" aria-label="Tipo de ruta">
+            <label><input type="radio" name="modo" value="corta" checked><span>🚶 Más corta</span></label>
+            <label><input type="radio" name="modo" value="accesible"><span>♿ Sin gradas</span></label>
+            <label><input type="radio" name="modo" value="techo"><span>☂️ Bajo techo</span></label>
+          </div>
+          <button id="route-btn" class="primary full" type="button">Calcular ruta</button>
+          <button id="btn-bano" class="secondary full" type="button">🚻 Baño más cercano</button>
+          <div id="route-result" class="route-result" aria-live="polite">Elige origen y destino, o toca un evento → "Cómo llegar".</div>
+          <button id="btn-compartir" class="secondary full" type="button">Compartir esta ruta</button>
+        </aside>
+      </div>
+    </section>
+
+    <!-- ================= MI HORARIO ================= -->
+    <section id="horario" class="panel hidden">
+      <div class="section-heading"><div><p class="eyebrow">MIS CLASES</p><h2>Mi horario</h2></div><span class="badge">Estudiantes</span></div>
+      <div id="horario-sin-cuenta" class="notice">Para cargar tu horario, abre el menú ☰ → <b>Soy estudiante</b>.</div>
+      <div id="horario-contenido">
+        <div id="proxima-clase"></div>
+        <div class="dos-col">
+          <div class="sub-box">
+            <h3>Importar desde Google Calendar</h3>
+            <p class="muted">En Google Calendar: Configuración → Importar y exportar → Exportar. Sube el archivo <b>.ics</b>; la app reconoce el aula escrita en cada clase (por ejemplo, "Aula C-201").</p>
+            <input type="file" id="archivo-ics" accept=".ics,text/calendar">
+            <p class="muted"><a href="horario_ejemplo.ics" download>Descargar horario de ejemplo</a></p>
+          </div>
+          <div class="sub-box">
+            <h3>Agregar clase a mano</h3>
+            <input id="cl-materia" placeholder="Materia" maxlength="60">
+            <div class="dias">
+              <label><input type="checkbox" class="cl-dia" value="1">Lun</label><label><input type="checkbox" class="cl-dia" value="2">Mar</label>
+              <label><input type="checkbox" class="cl-dia" value="3">Mié</label><label><input type="checkbox" class="cl-dia" value="4">Jue</label>
+              <label><input type="checkbox" class="cl-dia" value="5">Vie</label><label><input type="checkbox" class="cl-dia" value="6">Sáb</label>
+            </div>
+            <div class="fila"><input id="cl-inicio" type="time" value="08:15" aria-label="Hora de inicio"><input id="cl-fin" type="time" value="09:45" aria-label="Hora de fin"></div>
+            <select id="cl-aula" aria-label="Aula"></select>
+            <button id="btn-agregar-clase" class="primary full" type="button">Agregar clase</button>
+          </div>
+        </div>
+        <h3 class="subheading">Clases cargadas</h3>
+        <div id="lista-clases" class="manage-list"></div>
+        <button id="btn-borrar-horario" class="danger" type="button">Quitar todo el horario</button>
+      </div>
+    </section>
+
+    <!-- ================= AVISOS ================= -->
+    <section id="avisos" class="panel hidden">
+      <div class="section-heading"><div><p class="eyebrow">DE LOS ORGANIZADORES</p><h2>Avisos</h2></div><button id="btn-permiso" class="secondary hidden" type="button">🔔 Activar notificaciones</button></div>
+      <div id="lista-avisos" class="manage-list"></div>
+    </section>
+
+    <!-- ================= ORGANIZADORES ================= -->
+    <section id="organizer" class="panel hidden">
+      <div class="section-heading"><div><p class="eyebrow">ACCESO RESTRINGIDO</p><h2>Panel de organizadores</h2></div><span class="badge">Solo organizadores</span></div>
+      <div id="organizer-login">
+        <p class="notice">Este espacio es para las personas autorizadas a publicar y administrar eventos. Los eventos de organizadores quedan pendientes hasta que un administrador los aprueba.</p>
+        <form id="login-form" class="form-grid login-form">
+          <label>Usuario<input name="username" required autocomplete="username" placeholder="organizador o admin"></label>
+          <label>Contraseña<input name="password" type="password" required autocomplete="current-password" placeholder="Contraseña"></label>
+          <button class="primary wide" type="submit">Ingresar al panel</button>
+        </form>
+        <p id="login-message" class="error" aria-live="polite"></p>
+        <p class="demo-credentials">Acceso de demostración: <b>organizador</b> / <b>ucb2026</b> · <b>admin</b> / <b>ucb2026</b></p>
+      </div>
+      <div id="organizer-panel" class="hidden">
+        <div class="organizer-toolbar"><p class="notice" id="org-saludo"></p><button id="logout-btn" class="secondary" type="button">Cerrar sesión</button></div>
+        <h3 id="form-title" class="subheading">Crear un evento</h3>
+        <form id="event-form" class="form-grid">
+          <input type="hidden" name="id">
+          <label>Nombre del evento<input name="name" required maxlength="70" placeholder="Ej. Feria de robótica"></label>
+          <label>Categoría<select name="category" required><option value="">Seleccionar</option><option>Académico</option><option>Cultural</option><option>Deportivo</option><option>Social</option></select></label>
+          <label>Fecha<input name="date" type="date" required></label>
+          <label>Hora de inicio<input name="time" type="time" required></label>
+          <label>Lugar<select name="place" id="ev-lugar" required></select></label>
+          <label>Capacidad máxima<input name="capacity" type="number" min="1" max="10000" required placeholder="100"></label>
+          <label class="wide">Descripción<textarea name="description" rows="3" maxlength="240" placeholder="¿De qué trata el evento?"></textarea></label>
+          <label class="wide check-line"><input type="checkbox" name="asistencia"> Registrar asistencia con QR</label>
+          <div class="form-actions wide"><button id="save-event-btn" class="primary" type="submit">Guardar evento</button><button id="cancel-edit-btn" class="secondary hidden" type="button">Cancelar edición</button></div>
+        </form>
+        <p id="form-message" class="success" aria-live="polite"></p>
+        <h3 class="subheading">Administrar eventos</h3>
+        <div id="manage-event-list" class="manage-list"></div>
+      </div>
+    </section>
+
+    <!-- ================= ADMINISTRACIÓN ================= -->
+    <section id="admin" class="panel hidden">
+      <div class="section-heading"><div><p class="eyebrow">ADMINISTRADOR</p><h2>Administración</h2></div><span class="badge">CRUE / Comunicación</span></div>
+      <h3 class="subheading">Eventos pendientes de aprobación</h3>
+      <div id="admin-pendientes" class="manage-list"></div>
+      <h3 class="subheading">Caminos fuera de servicio</h3>
+      <p class="notice">Marca un ascensor, rampa o camino cerrado: todas las rutas lo evitan al instante.</p>
+      <div id="admin-caminos" class="caminos"></div>
+    </section>
+  </main>
+
+  <footer>UCB EVENTS · Prototipo académico · TECH MECH 2026 · Datos de ubicación por verificar</footer>
+
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true">
+    <div class="modal-caja"><button id="modal-cerrar" class="secondary cerrar" type="button">Cerrar</button><div id="modal-cuerpo"></div></div>
+  </div>
+  <div id="toast" role="status"></div>
+
+  <script src="lib/leaflet.js"></script>
+  <script src="lib/maplibre-gl.js"></script>
+  <script src="lib/leaflet-maplibre-gl.js"></script>
+  <script src="qrcode.js"></script>
+  <script src="datos.js"></script>
+  <script src="ruteo.js"></script>
+  <script src="horario.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
