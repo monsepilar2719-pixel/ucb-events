@@ -96,17 +96,19 @@ function bloqueConPisos(cfg) {
       id, tipo: p === cfg.pisoAcceso ? "bloque" : "piso", bloque: cfg.bloque, piso: p,
       nombre: cfg.nombre + " · " + nombrePiso(p), altura_m: cfg.altura + (p - cfg.pisoAcceso) * 3.2,
       sector: cfg.sector, alias: p === cfg.pisoAcceso ? [cfg.nombre] : [],
-    }, fp(cfg.x + (p - cfg.pisoAcceso) * 0.8, cfg.y - (p - cfg.pisoAcceso) * 0.8, cfg.plano)));
+    }, p === cfg.pisoAcceso || !cfg.asc ? fp(cfg.x, cfg.y, cfg.plano) : fp(cfg.asc[0] + (p - cfg.pisoAcceso) * 0.3, cfg.asc[1] - (p - cfg.pisoAcceso) * 0.3, cfg.plano)));
   });
   for (let i = 1; i < ids.length; i++)
     ARISTAS.push({ a: ids[i - 1].id, b: ids[i].id, tipo: "escalera", metros: 12, techado: true, nombre: "Gradas " + cfg.nombre + " " + nombrePiso(ids[i - 1].p) + "–" + nombrePiso(ids[i].p) });
   if (cfg.ascensor)
     for (let i = 0; i < ids.length; i++) for (let j = i + 1; j < ids.length; j++)
-      ARISTAS.push({ a: ids[i].id, b: ids[j].id, tipo: "ascensor", metros: 0, techado: true, nombre: "Ascensor " + cfg.nombre });
+      ARISTAS.push({ a: ids[i].id, b: ids[j].id, tipo: "ascensor", metros: 0, techado: true, nombre: "Ascensor " + cfg.nombre, nota: "junto a la entrada" });
+  if (cfg.ascensor && cfg.asc) ASCENSORES.push(Object.assign({ nombre: "Ascensor " + cfg.nombre + " (junto a la entrada)" }, fp(cfg.asc[0], cfg.asc[1])));
 }
+const ASCENSORES = [];
 function nombrePiso(p) { return p === 0 ? "Planta baja" : p < 0 ? "Subsuelo " + (-p) : "Piso " + p; }
-bloqueConPisos({ prefijo: "D", bloque: "D", nombre: "Bloque D", pisos: [0, 1, 2, 3, 4, 5], pisoAcceso: 0, altura: 4, x: 190, y: 812, plano: [88, 235], ascensor: true, sector: "D" });
-bloqueConPisos({ prefijo: "C", bloque: "C", nombre: "Bloque C", pisos: [-2, -1, 0, 1, 2, 3, 4], pisoAcceso: 0, altura: 8.5, x: 493, y: 716, plano: [388, 48], ascensor: true, sector: "C" });
+bloqueConPisos({ prefijo: "D", bloque: "D", nombre: "Bloque D", pisos: [0, 1, 2, 3, 4, 5], pisoAcceso: 0, altura: 4, x: 190, y: 812, asc: [195, 828], plano: [88, 235], ascensor: true, sector: "D" });
+bloqueConPisos({ prefijo: "C", bloque: "C", nombre: "Bloque C", pisos: [-2, -1, 0, 1, 2, 3, 4], pisoAcceso: 0, altura: 8.5, x: 493, y: 716, asc: [504, 721], plano: [388, 48], ascensor: true, sector: "C" });
 // Biblioteca: ascensor POR CONFIRMAR (por ahora solo gradas)
 bloqueConPisos({ prefijo: "B", bloque: "Biblioteca", nombre: "Biblioteca", pisos: [1, 2, 3, 4], pisoAcceso: 1, altura: 3, x: 541, y: 989, plano: [458, 262], ascensor: false, sector: "biblioteca" });
 
@@ -162,4 +164,4 @@ const EVENTOS = [
   { id: "futsal",   nombre: "Torneo interfacultades de futsal", categoria: "Deportivo", lugar: "coliseo", inicio: "2026-11-05T16:00", fin: "2026-11-05T19:00", capacidad: 400, esperados: 300, actuales: 0, registro: "libre", organizador: "Deportes UCB", descripcion: "Fase de grupos." },
 ];
 
-window.DATOS = { nodos: NODOS, aristas: ARISTAS, eventos: EVENTOS, aulas: AULAS, sectores: SECTORES, historia: HISTORIA_UCB };
+window.DATOS = { ascensores: ASCENSORES, nodos: NODOS, aristas: ARISTAS, eventos: EVENTOS, aulas: AULAS, sectores: SECTORES, historia: HISTORIA_UCB };

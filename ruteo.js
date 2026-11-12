@@ -178,7 +178,7 @@
       }
       const destino = t.hasta.nombre, nota = ar.nota ? " (" + ar.nota + ")" : "";
       const dh = (t.hasta.altura_m || 0) - (t.desde.altura_m || 0);
-      if (ar.tipo === "ascensor") pasos.push({ icono: "ascensor", texto: "Toma el ascensor hasta " + destino });
+      if (ar.tipo === "ascensor") pasos.push({ icono: "ascensor", texto: "Toma el ascensor" + (ar.nota ? " (" + ar.nota + " del " + (t.desde.bloque === "Biblioteca" ? "edificio" : "Bloque " + t.desde.bloque) + ")" : "") + " hasta " + destino });
       else if (ar.tipo === "escalera") pasos.push({ icono: "gradas", texto: (dh >= 0 ? "Sube" : "Baja") + " las gradas hasta " + destino + nota });
       else if (ar.tipo === "rampa") pasos.push({ icono: "rampa", texto: "Toma la rampa " + ar.metros + " m hasta " + destino + nota });
       else pasos.push({ icono: "camino", texto: "Camina " + ar.metros + " m hasta " + destino + (dh > 2 ? " (en subida)" : "") + nota });

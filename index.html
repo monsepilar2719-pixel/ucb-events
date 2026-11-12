@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <meta name="theme-color" content="#12345a">
+  <meta name="theme-color" content="#0b2a5b">
   <title>UCB Events</title>
   <link rel="manifest" href="manifest.webmanifest">
   <link rel="icon" href="icono-192.png">
@@ -14,7 +14,7 @@
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">U</span><div><strong>UCB EVENTS</strong><small>Campus La Paz · Eventos y rutas</small></div></div>
+    <div class="brand"><img class="brand-logo" src="logo.png" alt="UCB Events"><div><strong>UCB <em>EVENTS</em></strong><small>Campus La Paz · Eventos y rutas</small></div></div>
     <div class="topbar-right">
       <button id="btn-avisos" class="icon-btn" type="button" aria-label="Avisos"><svg viewBox="0 0 24 24"><path d="M12 22a2.5 2.5 0 0 0 2.4-2h-4.8A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5-6.7V3.5a2 2 0 0 0-4 0v.8A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg><span id="badge-avisos" class="num"></span></button>
       <button id="chip-sesion" class="chip" type="button">Visitante</button>
@@ -43,7 +43,7 @@
     <section class="hero">
       <div><p class="eyebrow">UNIVERSIDAD CATÓLICA BOLIVIANA "SAN PABLO" · SEDE LA PAZ</p><h1>Encuentra el evento.<br><span>Llega sin perderte.</span></h1>
       <p class="hero-copy">Eventos del campus, disponibilidad de aulas y rutas paso a paso, con opción de recorrido solo por rampas y ascensores.</p></div>
-      <div class="hero-stats" id="hero-stats"></div>
+      <div class="hero-der"><img class="hero-logo" src="logo.png" alt=""><div class="hero-stats" id="hero-stats"></div></div>
     </section>
 
     <nav class="tabs" id="tabs" aria-label="Secciones"></nav>
@@ -78,7 +78,7 @@
         <aside class="route-box">
           <h3>Cómo llegar</h3>
           <label>¿Dónde estás?<select id="from"></select></label>
-          <label id="from-piso-wrap" class="hidden">Piso en el Bloque D<select id="from-piso"><option value="0">Planta baja</option><option value="1">Piso 1</option><option value="2">Piso 2</option><option value="3">Piso 3</option><option value="4">Piso 4</option><option value="5">Piso 5</option></select></label>
+          <label id="from-piso-wrap" class="hidden">Piso en el Bloque D<select id="from-piso"><option value="0">Planta baja</option><option value="1">Piso 1</option><option value="2">Piso 2</option><option value="3">Piso 3</option><option value="4">Piso 4</option><option value="5">Piso 5</option></select><button id="btn-barometro" class="link" type="button">Detectar mi piso con el barómetro (simulación)</button></label>
           <button id="btn-gps" class="secondary full-sm" type="button">Usar mi ubicación (GPS)</button>
           <label>¿A dónde vas?<select id="to"></select></label>
           <div class="modos" role="radiogroup" aria-label="Tipo de ruta">
@@ -110,7 +110,7 @@
     <!-- CAMPUS E HISTORIA -->
     <section id="campus" class="panel hidden">
       <div class="section-heading"><div><p class="eyebrow">CONOCE LA UCB</p><h2>Campus e historia</h2></div></div>
-      <p class="intro-historia" id="historia-ucb"></p>
+      <img class="campus-foto" src="plano-campus.png" alt="Plano del campus UCB La Paz"><p class="intro-historia" id="historia-ucb"></p>
       <div id="sectores" class="sector-grid"></div>
       <p class="muted">Las reseñas de cada sector son provisionales y deben completarse con la historia oficial de la universidad.</p>
     </section>

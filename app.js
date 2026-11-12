@@ -198,6 +198,8 @@
     if (!punto) m.bindTooltip(n.nombre.replace(" · Planta baja", "").replace(" · Piso 1", ""), { direction: "top", offset: [0, -6] });
     m.on("click", () => popupLugar(n));
   });
+  // Ascensores junto a la entrada de los bloques C y D
+  (D.ascensores || []).forEach(x => L.marker([x.lat, x.lng], { icon: L.divIcon({ className: "", html: '<div class="pin-asc" title="' + esc(x.nombre) + '">' + svg("ascensor") + "</div>", iconSize: [22, 22], iconAnchor: [11, 11] }), zIndexOffset: 500 }).addTo(mapa).bindTooltip(x.nombre));
   function popupLugar(n) {
     const s = n.sector && D.sectores[n.sector];
     L.popup({ maxWidth: 280 }).setLatLng([n.lat, n.lng]).setContent("<b>" + esc(n.nombre) + "</b>" + (s ? '<p class="pop-hist">' + esc(s.texto) + "</p>" : "") +
@@ -291,6 +293,35 @@
   }
   $("#from").onchange = () => { $("#from-piso-wrap").classList.toggle("hidden", $("#from").value !== "D-P0"); pintarPlano(ultimaRuta); };
   $("#from-piso").onchange = () => calcular();
+
+  // ---------- Simulador de piso por barómetro (MOCKUP) ----------
+  // En una app nativa se leería el barómetro del celular. Aquí se simula la lectura.
+  // A ~3.600 m de altitud la presión baja unos 0,25 hPa por cada piso (3,2 m).
+  $("#btn-barometro").onclick = () => {
+    const P0 = 652.40, HPA_PISO = 0.25;
+    let altura = (+$("#from-piso").value || 0) * 3.2, objetivo = altura, t = 0;
+    abrirModal('<h3>Detectar mi piso · Bloque D</h3><p class="muted">Simulación del barómetro del celular (prototipo). En la app nativa la lectura es real y se calibra al escanear el QR de la planta baja.</p>' +
+      '<div class="baro"><div class="baro-edificio" id="b-edif">' + [5, 4, 3, 2, 1, 0].map(p => '<div class="b-piso" data-bp="' + p + '"><span>' + (p ? "Piso " + p : "PB") + "</span></div>").join("") + '<i id="b-yo"></i></div>' +
+      '<div class="baro-datos"><div class="baro-dial"><svg viewBox="0 0 120 70"><path d="M10 65a50 50 0 0 1 100 0" fill="none" stroke="#e1e7f0" stroke-width="10" stroke-linecap="round"/><path id="b-arco" d="M10 65a50 50 0 0 1 100 0" fill="none" stroke="#ffc502" stroke-width="10" stroke-linecap="round" pathLength="100" stroke-dasharray="0 100"/></svg><b id="b-hpa">—</b><small>hPa</small></div>' +
+      '<dl><dt>Calibración</dt><dd>' + P0.toFixed(2) + ' hPa (planta baja)</dd><dt>Altura relativa</dt><dd id="b-alt">—</dd><dt>Piso estimado</dt><dd id="b-piso" class="b-grande">—</dd></dl></div></div>' +
+      '<div class="fila"><button class="secondary" id="b-bajar" type="button">Bajar un piso</button><button class="secondary" id="b-subir" type="button">Subir un piso</button></div>' +
+      '<button class="primary full" id="b-usar" type="button">Usar este piso como punto de partida</button>');
+    const pintar = () => {
+      t += 1; altura += (objetivo - altura) * 0.12;
+      const ruido = Math.sin(t / 3) * 0.012 + (Math.random() - .5) * 0.01, hpa = P0 - altura / 3.2 * HPA_PISO + ruido;
+      const piso = Math.max(0, Math.min(5, Math.round((P0 - hpa) / HPA_PISO)));
+      if (!$("#b-hpa")) return;
+      $("#b-hpa").textContent = hpa.toFixed(2); $("#b-alt").textContent = "+" + altura.toFixed(1) + " m";
+      $("#b-piso").textContent = piso ? "Piso " + piso : "Planta baja"; $("#b-piso").dataset.p = piso;
+      $("#b-arco").setAttribute("stroke-dasharray", Math.min(100, altura / 16 * 100) + " 100");
+      $("#b-yo").style.bottom = (altura / 3.2 / 6 * 100 + 100 / 12) + "%";
+      $$(".b-piso").forEach(x => x.classList.toggle("activo", +x.dataset.bp === piso));
+    };
+    $("#b-subir").onclick = () => { objetivo = Math.min(16, Math.round(objetivo / 3.2 + 1) * 3.2); };
+    $("#b-bajar").onclick = () => { objetivo = Math.max(0, Math.round(objetivo / 3.2 - 1) * 3.2); };
+    $("#b-usar").onclick = () => { const p = $("#b-piso").dataset.p || "0"; $("#from").value = "D-P0"; $("#from-piso").value = p; $("#from-piso-wrap").classList.remove("hidden"); cerrarModal(); toast("Punto de partida: Bloque D · " + nombrePiso(+p) + " (detectado por barómetro, simulación)."); calcular(); };
+    timerModal = setInterval(pintar, 120); pintar();
+  };
 
   function actualizarGPS(pos, primero) {
     const lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy || 30;
