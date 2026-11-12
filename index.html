@@ -10,11 +10,11 @@
   <link rel="apple-touch-icon" href="icono-192.png">
   <link rel="stylesheet" href="leaflet.css">
   <link rel="stylesheet" href="maplibre-gl.css">
-  <link rel="stylesheet" href="styles.css">
+  <link rel="stylesheet" href="styles.css?v=11">
 </head>
 <body>
   <header class="topbar">
-    <div class="brand"><img class="brand-logo" src="logo.png" alt="UCB Events"><div><strong>UCB <em>EVENTS</em></strong><small>Campus La Paz · Eventos y rutas</small></div></div>
+    <div class="brand"><img class="brand-logo" src="logo.png" alt="UCB Events" width="46" height="46" style="width:46px;height:46px"><div><strong>UCB <em>EVENTS</em></strong><small>Campus La Paz · Eventos y rutas</small></div></div>
     <div class="topbar-right">
       <button id="btn-avisos" class="icon-btn" type="button" aria-label="Avisos"><svg viewBox="0 0 24 24"><path d="M12 22a2.5 2.5 0 0 0 2.4-2h-4.8A2.5 2.5 0 0 0 12 22Zm7-6V11a7 7 0 0 0-5-6.7V3.5a2 2 0 0 0-4 0v.8A7 7 0 0 0 5 11v5l-2 2v1h18v-1l-2-2Z"/></svg><span id="badge-avisos" class="num"></span></button>
       <button id="chip-sesion" class="chip" type="button">Visitante</button>
@@ -43,7 +43,7 @@
     <section class="hero">
       <div><p class="eyebrow">UNIVERSIDAD CATÓLICA BOLIVIANA "SAN PABLO" · SEDE LA PAZ</p><h1>Encuentra el evento.<br><span>Llega sin perderte.</span></h1>
       <p class="hero-copy">Eventos del campus, disponibilidad de aulas y rutas paso a paso, con opción de recorrido solo por rampas y ascensores.</p></div>
-      <div class="hero-der"><img class="hero-logo" src="logo.png" alt=""><div class="hero-stats" id="hero-stats"></div></div>
+      <div class="hero-der"><img class="hero-logo" src="logo.png" alt="" width="120" height="120" style="max-width:120px;max-height:120px"><div class="hero-stats" id="hero-stats"></div></div>
     </section>
 
     <nav class="tabs" id="tabs" aria-label="Secciones"></nav>
@@ -178,8 +178,8 @@
   <script src="maplibre-gl.js"></script>
   <script src="leaflet-maplibre-gl.js"></script>
   <script src="qrcode.js"></script>
-  <script src="datos.js"></script>
-  <script src="ruteo.js"></script>
-  <script src="app.js"></script>
+  <script src="datos.js?v=11"></script>
+  <script src="ruteo.js?v=11"></script>
+  <script src="app.js?v=11"></script>
 </body>
 </html>

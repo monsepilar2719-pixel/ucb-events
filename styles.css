@@ -210,3 +210,5 @@ footer{color:var(--muted)}
 #b-arco{transition:stroke-dasharray .2s}
 .baro-datos dl{display:grid;grid-template-columns:auto 1fr;gap:4px 10px;font-size:12px;margin:10px 0 0}.baro-datos dt{color:var(--muted)}.baro-datos dd{margin:0;font-weight:600}
 .b-grande{font:800 18px Montserrat!important;color:var(--navy)}
+
+@media(max-width:760px){.hero-logo{display:none!important}.brand-logo{width:40px!important;height:40px!important}}
