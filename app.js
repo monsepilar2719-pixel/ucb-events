@@ -1,8 +1,6 @@
 // =====================================================================
-// UCB EVENTS · lógica de la app
-// Interfaz basada en la versión del equipo (tarjetas, pestañas, panel de
-// organizadores) + rutas reales, accesibilidad, horario, avisos y asistencia QR.
-// Prototipo sin servidor: todo se guarda en el navegador (localStorage).
+// UCB EVENTS · lógica de la aplicación (prototipo sin servidor)
+// Roles: visitante, organizador, administrador.
 // =====================================================================
 (function () {
   "use strict";
@@ -10,879 +8,720 @@
   const $ = s => document.querySelector(s);
   const $$ = s => [...document.querySelectorAll(s)];
   const esc = s => String(s == null ? "" : s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-  const nodo = id => D.nodos.find(n => n.id === id);
   const pad = n => String(n).padStart(2, "0");
+  const nodo = id => D.nodos.find(n => n.id === id);
+  const aula = id => D.aulas.find(a => a.id === id);
 
   // ---------- Configuración de la demo ----------
   const CUENTAS = { // SOLO DEMOSTRACIÓN: en producción, login institucional y permisos en el servidor
     organizador: { clave: "ucb2026", rol: "organizador", nombre: "Mecacentro UCB" },
     admin:       { clave: "ucb2026", rol: "admin",       nombre: "Administración UCB" },
   };
-  const AFORO_VENCE_MS = 2 * 3600e3;  // el aforo declarado vence a las 2 h
-  const ESPERA_AVISO_MS = 60e3;       // anti-spam por evento (producción: 30 min)
-  const VENTANA_QR_MS = 30e3;         // el QR de asistencia cambia cada 30 s
-  const MARGEN_CLASE_S = 180;         // llegar 3 min antes a clase
+  const ESPERA_AVISO_MS = 60e3, VENTANA_QR_MS = 30e3;
 
   // ---------- Almacenamiento ----------
-  const leer = (k, def) => { try { const v = JSON.parse(localStorage.getItem("ucbev_" + k)); return v == null ? def : v; } catch (e) { return def; } };
-  const guardar = (k, v) => { try { localStorage.setItem("ucbev_" + k, JSON.stringify(v)); } catch (e) {} };
+  const P = "ucbev3_";
+  const leer = (k, def) => { try { const v = JSON.parse(localStorage.getItem(P + k)); return v == null ? def : v; } catch (e) { return def; } };
+  const guardar = (k, v) => { try { localStorage.setItem(P + k, JSON.stringify(v)); } catch (e) {} };
 
-  // ---------- Sesión y roles ----------
+  // ---------- Íconos (SVG simples) ----------
+  const ICO = {
+    camino: '<path d="M13 4a2 2 0 1 1-4 0 2 2 0 0 1 4 0Zm-3 4h3l2 5 3 1-.6 1.9L13.5 15 13 13l-1 4 3 3v2h-2v-1.2l-3-2.8L9 22H7l2.2-9.4L8 13v3H6v-4.5L10 8Z"/>',
+    rampa: '<path d="M3 20h18v-2.5L3 9v11Zm2-3.5v-4.1l9 4.1H5Z"/>',
+    gradas: '<path d="M3 21v-4h4v-4h4V9h4V5h6v2h-4v4h-4v4h-4v4H5v2H3Z"/>',
+    ascensor: '<path d="M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2Zm4 4-3 3h6L9 7Zm6 10 3-3h-6l3 3Z"/>',
+    meta: '<path d="M12 2a7 7 0 0 0-7 7c0 5.2 7 13 7 13s7-7.8 7-13a7 7 0 0 0-7-7Zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5Z"/>',
+    gps: '<path d="M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8Zm9 3h-2.1A7 7 0 0 0 13 5.1V3h-2v2.1A7 7 0 0 0 5.1 11H3v2h2.1a7 7 0 0 0 5.9 5.9V21h2v-2.1a7 7 0 0 0 5.9-5.9H21v-2Z"/>',
+  };
+  const svg = (k, cls) => '<svg class="ico ' + (cls || "") + '" viewBox="0 0 24 24" aria-hidden="true">' + (ICO[k] || ICO.camino) + "</svg>";
+
+  // ---------- Sesión ----------
   let sesion = leer("sesion", { rol: "visitante" });
-  const perfil = () => leer("perfil", null);
-  const tieneCuenta = () => sesion.rol !== "visitante";
   const esGestor = () => sesion.rol === "organizador" || sesion.rol === "admin";
   const puedeGestionar = ev => sesion.rol === "admin" || (sesion.rol === "organizador" && ev.organizador === sesion.nombre);
-  const nombreSesion = () => sesion.rol === "estudiante" ? (perfil() || {}).nombre || "Estudiante" : sesion.rol === "visitante" ? "Visitante" : sesion.nombre;
-  const ROL_TXT = { visitante: "Sin cuenta", estudiante: "Estudiante", organizador: "Organizador", admin: "Administrador" };
+  const ROL_TXT = { visitante: "Acceso público", organizador: "Organizador", admin: "Administrador" };
+
+  // ---------- Lugares (aulas y puntos del campus) ----------
+  function lugarInfo(id) {
+    const a = aula(id);
+    if (a) {
+      const n = nodo(a.nodo);
+      const bloque = a.bloque === "Biblioteca" ? "Biblioteca" : "Bloque " + a.bloque;
+      return { id, nodo: a.nodo, nombre: a.nombre, direccion: bloque + " · " + nombrePiso(a.piso) + " · " + a.nombre, aula: a, n };
+    }
+    const n = nodo(id);
+    return n ? { id, nodo: id, nombre: n.nombre, direccion: n.nombre, n } : { id, nodo: "entrada", nombre: id, direccion: id };
+  }
+  function nombrePiso(p) { return p === 0 ? "Planta baja" : p < 0 ? "Subsuelo " + (-p) : "Piso " + p; }
+  const ESPACIOS = ["coliseo", "agora", "miamicito", "entrada", "epc", "F"];
+
+  function opcionesLugar(incluirEventos) {
+    let h = "";
+    if (incluirEventos) {
+      const act = eventosVisibles().filter(e => estadoFecha(e) !== "past");
+      if (act.length) h += '<optgroup label="Eventos">' + act.map(e => '<option value="ev:' + e.id + '">' + esc(e.nombre) + "</option>").join("") + "</optgroup>";
+    }
+    h += '<optgroup label="Espacios del campus">' + ESPACIOS.map(id => '<option value="' + id + '">' + esc(nodo(id).nombre) + "</option>").join("") + "</optgroup>";
+    const grupos = {};
+    D.aulas.forEach(a => { const g = a.bloque === "Biblioteca" ? "Biblioteca" : "Bloque " + a.bloque; (grupos[g] = grupos[g] || []).push(a); });
+    Object.keys(grupos).forEach(g => {
+      h += '<optgroup label="' + g + '">' + grupos[g].map(a => '<option value="' + a.id + '">' + esc(a.nombre + " · " + nombrePiso(a.piso)) + "</option>").join("") + "</optgroup>";
+    });
+    return h;
+  }
 
   // ---------- Eventos ----------
   function eventosGuardados() {
     let evs = leer("eventos", null);
-    if (!evs) {
-      evs = D.eventos.map(e => Object.assign({ estado: "aprobado", asistencia: false }, e));
-      guardar("eventos", evs);
-    }
+    if (!evs) { evs = D.eventos.map(e => Object.assign({ estado: "aprobado", secreto: nuevoSecreto() }, e)); guardar("eventos", evs); }
     return evs;
   }
-  function guardarEventos(evs) { guardar("eventos", evs); }
+  const guardarEventos = evs => guardar("eventos", evs);
   const asistentes = id => leer("asistencias", {})[id] || [];
-  function guardarAsistentes(id, lista) { const a = leer("asistencias", {}); a[id] = lista; guardar("asistencias", a); }
-
+  function guardarAsistentes(id, l) { const a = leer("asistencias", {}); a[id] = l; guardar("asistencias", a); }
   function eventos() {
-    const aforos = leer("aforos", {});
     return eventosGuardados().map(e => {
       const ev = Object.assign({}, e);
-      if (ev.asistencia) {
-        const n = asistentes(ev.id).length;
-        ev.aforo_pct = ev.capacidad ? Math.min(100, Math.round(n / ev.capacidad * 100)) : null;
-        ev.aforo_auto = true; ev.asistentes_n = n;
-      } else if (aforos[ev.id]) {
-        const a = aforos[ev.id];
-        if (Date.now() - a.t < AFORO_VENCE_MS) { ev.aforo_pct = a.pct; ev.aforo_t = a.t; }
-        else ev.aforo_pct = null;
-      }
+      ev.actual = ev.registro === "qr" ? asistentes(ev.id).length + (ev.actuales || 0) : (ev.actuales || 0);
+      ev.lugarInfo = lugarInfo(ev.lugar);
       return ev;
     });
   }
+  const eventosVisibles = () => eventos().filter(e => e.estado === "aprobado" || puedeGestionar(e));
   const evento = id => eventos().find(e => e.id === id);
-
   function estadoFecha(ev) {
     const ahora = new Date(), ini = new Date(ev.inicio), fin = new Date(ev.fin || ev.inicio);
     if (fin < ahora) return "past";
-    if (ini.toDateString() === ahora.toDateString() || (ini <= ahora && fin >= ahora)) return "today";
+    if (ini <= ahora) return "live";
+    if (ini.toDateString() === ahora.toDateString()) return "today";
     return "upcoming";
   }
-  const ETQ_FECHA = { past: "Evento pasado", today: "Es hoy", upcoming: "Próximo evento" };
-  function nivelAforo(pct) {
-    if (pct == null) return { c: "", t: "Aforo sin dato" };
-    if (pct >= 100) return { c: "lleno", t: "Lleno" };
-    if (pct >= 80) return { c: "alto", t: "Casi lleno" };
-    if (pct >= 50) return { c: "medio", t: "Ocupación moderada" };
-    return { c: "", t: "Hay espacio" };
-  }
+  const ETQ = { past: "Finalizado", live: "En curso", today: "Hoy", upcoming: "Próximo" };
   const fmtFecha = iso => new Date(iso).toLocaleDateString("es-BO", { weekday: "short", day: "numeric", month: "short" });
   const fmtHora = t => new Date(t).toLocaleTimeString("es-BO", { hour: "2-digit", minute: "2-digit" });
-  const fmtMin = s => Math.max(1, Math.round(s / 60)) + " min";
 
   // =====================================================================
-  // NAVEGACIÓN: pestañas y menú desplegable
+  // NAVEGACIÓN
   // =====================================================================
-  const SECCIONES = ["events", "map", "horario", "avisos", "organizer", "admin"];
-  function irA(id) {
-    if (id === "admin" && sesion.rol !== "admin") id = "organizer";
-    SECCIONES.forEach(s => $("#" + s).classList.toggle("hidden", s !== id));
-    $$(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === id));
-    $$(".menu-item[data-ir]").forEach(t => t.classList.toggle("activo", t.dataset.ir === id));
-    if (id === "map") setTimeout(() => mapa.invalidateSize(), 50);
-    if (id === "avisos") { guardar("avisos_leidos", avisosMios().length); pintarBadge(); pintarAvisos(); }
-    if (id === "horario") pintarHorario();
-    cerrarMenu();
+  const SECCIONES = [
+    { id: "events", t: "Eventos", roles: ["visitante", "organizador", "admin"] },
+    { id: "map", t: "Mapa y rutas", roles: ["visitante", "organizador", "admin"] },
+    { id: "aulas", t: "Aulas", roles: ["visitante", "organizador", "admin"] },
+    { id: "campus", t: "Campus e historia", roles: ["visitante", "organizador", "admin"] },
+    { id: "organizer", t: "Mis eventos", roles: ["organizador", "admin"] },
+    { id: "admin", t: "Administración", roles: ["admin"] },
+  ];
+  let seccionActual = "events";
+  function pintarNavegacion() {
+    const vis = SECCIONES.filter(s => s.roles.includes(sesion.rol));
+    $("#tabs").innerHTML = vis.map(s => '<button class="tab' + (s.id === seccionActual ? " active" : "") + '" data-tab="' + s.id + '" type="button">' + s.t + "</button>").join("");
+    $("#menu-secciones").innerHTML = vis.map(s => '<button class="menu-item' + (s.id === seccionActual ? " activo" : "") + '" data-ir="' + s.id + '" type="button">' + s.t + "</button>").join("");
+    $$("[data-tab]").forEach(b => b.onclick = () => irA(b.dataset.tab));
+    $$("[data-ir]").forEach(b => b.onclick = () => irA(b.dataset.ir));
   }
-  $$(".tab").forEach(b => b.onclick = () => irA(b.dataset.tab));
-  $$(".menu-item[data-ir]").forEach(b => b.onclick = () => irA(b.dataset.ir));
-
-  function abrirMenu() { $("#menu").classList.add("abierto"); $("#velo").classList.remove("hidden"); $("#menu").setAttribute("aria-hidden", "false"); $("#btn-menu").setAttribute("aria-expanded", "true"); }
-  function cerrarMenu() { $("#menu").classList.remove("abierto"); $("#velo").classList.add("hidden"); $("#menu").setAttribute("aria-hidden", "true"); $("#btn-menu").setAttribute("aria-expanded", "false"); }
-  $("#btn-menu").onclick = abrirMenu;
-  $("#chip-sesion").onclick = abrirMenu;
-  $("#btn-cerrar-menu").onclick = cerrarMenu;
-  $("#velo").onclick = cerrarMenu;
+  function irA(id) {
+    const s = SECCIONES.find(x => x.id === id);
+    if (!s || !s.roles.includes(sesion.rol)) id = "events";
+    seccionActual = id;
+    SECCIONES.forEach(x => $("#" + x.id).classList.toggle("hidden", x.id !== id));
+    pintarNavegacion(); cerrarMenu();
+    if (id === "map") setTimeout(() => { mapa.invalidateSize(); if (ultimosLimites) mapa.fitBounds(ultimosLimites); }, 80);
+    if (id === "aulas") pintarAulas();
+  }
+  function abrirMenu() { $("#menu").classList.add("abierto"); $("#velo").classList.remove("hidden"); $("#menu").setAttribute("aria-hidden", "false"); }
+  function cerrarMenu() { $("#menu").classList.remove("abierto"); $("#velo").classList.add("hidden"); $("#menu").setAttribute("aria-hidden", "true"); }
+  $("#btn-menu").onclick = abrirMenu; $("#chip-sesion").onclick = abrirMenu; $("#btn-cerrar-menu").onclick = cerrarMenu; $("#velo").onclick = cerrarMenu;
   document.addEventListener("keydown", e => { if (e.key === "Escape") { cerrarMenu(); cerrarModal(); } });
 
   function pintarSesion() {
-    $("#chip-sesion").textContent = "👤 " + nombreSesion();
-    $("#menu-nombre").textContent = nombreSesion();
+    $("#chip-sesion").textContent = sesion.rol === "visitante" ? "Visitante" : sesion.nombre;
+    $("#menu-nombre").textContent = sesion.rol === "visitante" ? "Visitante" : sesion.nombre;
     $("#menu-rol").textContent = ROL_TXT[sesion.rol];
-    $("#menu-admin").classList.toggle("hidden", sesion.rol !== "admin");
-    let h = "";
-    if (sesion.rol === "visitante") {
-      h = '<button class="primary" data-s="estudiante" type="button">🎓 Soy estudiante</button>' +
-          '<button class="secondary" data-s="gestor" type="button">🛠️ Ingresar como organizador o admin</button>';
-    } else if (sesion.rol === "estudiante") {
-      const p = perfil() || {};
-      h = '<p class="muted">Código: ' + esc(p.codigo || "—") + '</p><button class="secondary" data-s="editar" type="button">Editar mis datos</button>' +
-          '<button class="danger" data-s="salir" type="button">Cerrar sesión</button>';
-    } else {
-      h = '<button class="secondary" data-s="panel" type="button">Ir a mi panel</button><button class="danger" data-s="salir" type="button">Cerrar sesión</button>';
-    }
-    $("#menu-sesion").innerHTML = h;
-    $$("#menu-sesion [data-s]").forEach(b => b.onclick = () => {
-      const a = b.dataset.s;
-      if (a === "estudiante" || a === "editar") { cerrarMenu(); pedirPerfil(() => toast("¡Listo! Entraste como estudiante.")); }
-      else if (a === "gestor" || a === "panel") irA("organizer");
-      else if (a === "salir") cerrarSesion();
-    });
+    $("#menu-sesion").innerHTML = sesion.rol === "visitante"
+      ? '<button class="secondary" data-s="login" type="button">Acceso para organizadores y administración</button>'
+      : '<button class="danger" data-s="salir" type="button">Cerrar sesión</button>';
+    $$("#menu-sesion [data-s]").forEach(b => b.onclick = () => b.dataset.s === "login" ? (cerrarMenu(), login()) : cerrarSesion());
+    $("#org-nombre").textContent = esGestor() ? sesion.nombre : "";
   }
-  function cambiarSesion(s) { sesion = s; guardar("sesion", s); refrescarTodo(); }
-  function cerrarSesion() { cambiarSesion({ rol: "visitante" }); cerrarMenu(); toast("Sesión cerrada."); }
+  function login() {
+    abrirModal('<h3>Acceso restringido</h3><p class="muted">Solo para organizadores autorizados y administración.</p>' +
+      '<form id="lf" class="left"><label>Usuario<input name="u" required autocomplete="username" placeholder="organizador o admin"></label>' +
+      '<label>Contraseña<input name="p" type="password" required autocomplete="current-password"></label>' +
+      '<p id="lf-err" class="error"></p><button class="primary full" type="submit">Ingresar</button></form>' +
+      '<p class="demo-credentials">Demostración: <b>organizador</b> / <b>ucb2026</b> · <b>admin</b> / <b>ucb2026</b></p>');
+    $("#lf").onsubmit = e => {
+      e.preventDefault();
+      const f = new FormData(e.target), c = CUENTAS[f.get("u").trim().toLowerCase()];
+      if (c && f.get("p") === c.clave) { sesion = { rol: c.rol, nombre: c.nombre }; guardar("sesion", sesion); cerrarModal(); refrescarTodo(); irA(c.rol === "admin" ? "admin" : "organizer"); toast("Sesión iniciada: " + c.nombre); }
+      else $("#lf-err").textContent = "Usuario o contraseña incorrectos.";
+    };
+  }
+  function cerrarSesion() { sesion = { rol: "visitante" }; guardar("sesion", sesion); cerrarMenu(); refrescarTodo(); irA("events"); toast("Sesión cerrada."); }
 
   // =====================================================================
-  // MAPA REAL (Leaflet + OpenStreetMap) y PLANO UCB
+  // MAPA
   // =====================================================================
   const centro = [D.nodos.reduce((s, n) => s + n.lat, 0) / D.nodos.length, D.nodos.reduce((s, n) => s + n.lng, 0) / D.nodos.length];
   const mapa = L.map("mapa", { zoomControl: true }).setView(centro, 18);
-  // ---- Fondo del mapa ----
-  // Por defecto: OpenFreeMap (datos de OpenStreetMap, gratis, sin clave y sin bloqueos).
-  // El servidor tile.openstreetmap.org bloquea a apps como esta (política de uso), por eso no se usa por defecto.
   const CFG = window.MAPA || {};
-  const fondo = CFG.fondo || "openfreemap";
   function sinFondo(msg) { $("#mapa").classList.add("sin-fondo"); if (msg) toast(msg); }
-  if (fondo === "openfreemap" && L.maplibreGL) {
+  if ((CFG.fondo || "openfreemap") === "openfreemap" && L.maplibreGL) {
     try {
-      const capa = L.maplibreGL({
-        style: "https://tiles.openfreemap.org/styles/" + (CFG.estilo || "positron"),
-        attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>',
-      }).addTo(mapa);
-      let avisado = false;
-      capa.getMaplibreMap().on("error", () => {
-        if (!avisado) { avisado = true; sinFondo(navigator.onLine === false ? "Sin internet: el fondo del mapa no carga. Las rutas funcionan igual; usa también «Plano UCB»." : ""); }
-      });
-    } catch (e) { sinFondo("Este dispositivo no puede dibujar el mapa base. Usa «Plano UCB»; las rutas funcionan igual."); }
-  } else if (fondo === "osm" || fondo === "carto") {
-    const usarCarto = fondo === "carto" && CFG.carto_key;
-    L.tileLayer(usarCarto
-      ? "https://{s}.basemaps.cartocdn.com/rastertiles/light_all/{z}/{x}/{y}.png?key=" + encodeURIComponent(CFG.carto_key)
-      : "https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxZoom: 20, maxNativeZoom: 19, subdomains: "abcd", referrerPolicy: "strict-origin-when-cross-origin",
-      attribution: '&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>' + (usarCarto ? ' &copy; <a href="https://carto.com/attribution/">CARTO</a>' : ""),
-    }).addTo(mapa);
+      const capa = L.maplibreGL({ style: "https://tiles.openfreemap.org/styles/" + (CFG.estilo || "positron"),
+        attribution: '<a href="https://openfreemap.org" target="_blank" rel="noopener">OpenFreeMap</a> &copy; <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a>' }).addTo(mapa);
+      let av = false; capa.getMaplibreMap().on("error", () => { if (!av) { av = true; sinFondo(); } });
+    } catch (e) { sinFondo("Este dispositivo no puede dibujar el mapa base. Usa «Plano UCB»."); }
+  } else if (CFG.fondo === "osm") {
+    L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", { maxZoom: 20, maxNativeZoom: 19, attribution: "&copy; OpenStreetMap" }).addTo(mapa);
   } else sinFondo();
 
-  const ESTILO = {
-    camino:   { color: "#8e9aa6", weight: 4 },
-    rampa:    { color: "#25a58b", weight: 5 },
-    escalera: { color: "#d9442b", weight: 4, dashArray: "4 6" },
-    ascensor: { color: "#8b4fd6", weight: 5 },
-  };
-  // Geometría de una arista (si viene de OpenStreetMap/Footpath trae "puntos")
-  function geometria(ar, desdeId) {
-    const a = nodo(ar.a), b = nodo(ar.b);
-    let pts = ar.puntos && ar.puntos.length ? ar.puntos.slice() : [[a.lat, a.lng], [b.lat, b.lng]];
-    if (desdeId && desdeId !== ar.a) pts.reverse();
-    return pts;
-  }
-  const grupoArista = ar => ar.nombre || (nodo(ar.a).nombre + " ↔ " + nodo(ar.b).nombre + " (" + ar.tipo + ")");
-  function cerradas() {
-    const g = new Set(leer("cerrados", []));
-    return new Set(D.aristas.map((ar, i) => g.has(grupoArista(ar)) ? i : -1).filter(i => i >= 0));
-  }
+  const ESTILO = { camino: { color: "#8e9aa6", weight: 4 }, rampa: { color: "#1f9d7a", weight: 5 }, escalera: { color: "#c8452c", weight: 4, dashArray: "4 6" }, ascensor: { color: "#6f4cc3", weight: 5 } };
+  const grupoArista = ar => ar.nombre || (nodo(ar.a).nombre + " – " + nodo(ar.b).nombre);
+  function cerradas() { const g = new Set(leer("cerrados", [])); return new Set(D.aristas.map((ar, i) => g.has(grupoArista(ar)) ? i : -1).filter(i => i >= 0)); }
   const opcionesRuta = () => ({ cerradas: cerradas() });
-
   const capaCaminos = L.layerGroup().addTo(mapa);
   function dibujarCaminos() {
-    capaCaminos.clearLayers();
-    const c = cerradas();
+    capaCaminos.clearLayers(); const c = cerradas();
     D.aristas.forEach((ar, i) => {
       const a = nodo(ar.a), b = nodo(ar.b);
-      if (!a || !b || (a.lat === b.lat && a.lng === b.lng)) return;
-      const off = c.has(i);
-      L.polyline(geometria(ar), off ? { color: "#000", weight: 3, dashArray: "2 8", opacity: .6 } : (ESTILO[ar.tipo] || ESTILO.camino))
-        .bindTooltip((off ? "⛔ CERRADO · " : "") + ar.tipo + (ar.nota ? " · " + ar.nota : "")).addTo(capaCaminos);
+      if (!a || !b || Ruteo.haversine(a, b) < 1.5) return;
+      L.polyline([[a.lat, a.lng], [b.lat, b.lng]], c.has(i) ? { color: "#000", weight: 3, dashArray: "2 8", opacity: .6 } : ESTILO[ar.tipo] || ESTILO.camino)
+        .bindTooltip((c.has(i) ? "Fuera de servicio · " : "") + { camino: "Camino", rampa: "Rampa", escalera: "Gradas", ascensor: "Ascensor" }[ar.tipo] + " · " + ar.metros + " m").addTo(capaCaminos);
     });
   }
-  D.nodos.forEach(n => {
-    const html = n.tipo === "bano" ? '<div class="pin pin-bano">🚻</div>' : '<div class="pin pin-' + n.tipo + '"></div>';
-    const tam = n.tipo === "bano" ? 24 : 14;
-    L.marker([n.lat, n.lng], { icon: L.divIcon({ className: "", html, iconSize: [tam, tam], iconAnchor: [tam / 2, tam / 2] }), zIndexOffset: n.piso * 10 })
-      .addTo(mapa).bindPopup("<b>" + esc(n.nombre) + "</b><br>" + (n.piso ? "Piso " + n.piso : "Planta baja") +
-        (n.tipo === "bano" ? (n.accesible ? " · ♿ accesible" : " · no accesible") : "") +
-        '<div class="pop-acc"><button class="secondary" data-desde="' + n.id + '">Salgo de aquí</button><button class="primary" data-hasta="' + n.id + '">Ir aquí</button></div>');
+  // Puntos visibles (planta baja / acceso de cada bloque)
+  D.nodos.filter(n => n.tipo !== "piso").forEach(n => {
+    const punto = n.tipo === "punto";
+    const html = n.tipo === "bano" ? '<div class="pin pin-bano">WC</div>' : '<div class="pin pin-' + n.tipo + '"></div>';
+    const tam = n.tipo === "bano" ? 24 : punto ? 10 : 15;
+    const m = L.marker([n.lat, n.lng], { icon: L.divIcon({ className: "", html, iconSize: [tam, tam], iconAnchor: [tam / 2, tam / 2] }) }).addTo(mapa);
+    if (!punto) m.bindTooltip(n.nombre.replace(" · Planta baja", "").replace(" · Piso 1", ""), { direction: "top", offset: [0, -6] });
+    m.on("click", () => popupLugar(n));
+  });
+  function popupLugar(n) {
+    const s = n.sector && D.sectores[n.sector];
+    L.popup({ maxWidth: 280 }).setLatLng([n.lat, n.lng]).setContent("<b>" + esc(n.nombre) + "</b>" + (s ? '<p class="pop-hist">' + esc(s.texto) + "</p>" : "") +
+      '<div class="pop-acc"><button class="secondary" data-desde="' + n.id + '">Estoy aquí</button><button class="primary" data-hasta="' + n.id + '">Ir aquí</button></div>').openOn(mapa);
+  }
+  mapa.on("click", e => {
+    if (e.originalEvent && e.originalEvent.target && e.originalEvent.target.closest(".leaflet-marker-icon")) return;
+    const { nodo: n } = Ruteo.nodoMasCercano(D, e.latlng.lat, e.latlng.lng);
+    L.popup().setLatLng(e.latlng).setContent("Punto más cercano: <b>" + esc(n.nombre) + '</b><div class="pop-acc"><button class="secondary" data-desde="' + n.id + '">Estoy aquí</button><button class="primary" data-hasta="' + n.id + '">Ir aquí</button></div>').openOn(mapa);
   });
   mapa.on("popupopen", e => {
     e.popup.getElement().querySelectorAll("button").forEach(btn => btn.onclick = () => {
-      if (btn.dataset.desde) $("#from").value = btn.dataset.desde;
+      if (btn.dataset.desde) ponerOrigen(btn.dataset.desde);
       if (btn.dataset.hasta) $("#to").value = btn.dataset.hasta;
-      mapa.closePopup(); pintarPlano();
-      if ($("#from").value !== $("#to").value) calcular();
+      if (btn.dataset.ev) $("#to").value = "ev:" + btn.dataset.ev;
+      mapa.closePopup(); calcular();
     });
   });
 
-  // ---- Plano UCB (imagen oficial con pines y ruta en SVG) ----
-  const etiquetaCorta = n => n.tipo === "bano" ? "🚻" : n.tipo === "entrada" ? "Entrada" : n.id === "coliseo" ? "Coliseo" : n.bloque ? n.bloque : n.nombre.split(" ")[0];
+  // ---- Eventos en el mapa: aparecen mientras están activos y desaparecen solos al terminar ----
+  const capaEventos = L.layerGroup().addTo(mapa);
+  function pintarEventosMapa() {
+    capaEventos.clearLayers();
+    const porNodo = {};
+    eventos().filter(e => e.estado === "aprobado" && estadoFecha(e) !== "past").forEach(e => { (porNodo[e.lugarInfo.nodo] = porNodo[e.lugarInfo.nodo] || []).push(e); });
+    Object.keys(porNodo).forEach(nid => {
+      const n = nodo(nid), lista = porNodo[nid], vivo = lista.some(e => estadoFecha(e) === "live");
+      const etiqueta = lista.length === 1 ? lista[0].nombre : lista.length + " eventos";
+      const icon = L.divIcon({ className: "", html: '<div class="ev-pin' + (vivo ? " vivo" : "") + '"><span>' + esc(etiqueta.length > 22 ? etiqueta.slice(0, 21) + "…" : etiqueta) + "</span></div>", iconSize: [0, 0], iconAnchor: [0, 0] });
+      L.marker([n.lat, n.lng], { icon, zIndexOffset: 1000 }).addTo(capaEventos).on("click", () => {
+        L.popup({ maxWidth: 300 }).setLatLng([n.lat, n.lng]).setContent(lista.map(e =>
+          '<div class="pop-ev"><span class="estado ' + estadoFecha(e) + '">' + ETQ[estadoFecha(e)] + "</span><b>" + esc(e.nombre) + "</b><br><small>" + fmtFecha(e.inicio) + " · " + fmtHora(e.inicio) + "–" + fmtHora(e.fin) + "<br>" + esc(e.lugarInfo.direccion) + '</small><div class="pop-acc"><button class="primary" data-ev="' + e.id + '">Cómo llegar</button></div></div>').join("")).openOn(mapa);
+      });
+    });
+    pintarPlano(ultimaRuta);
+  }
+
+  // ---- Plano UCB ----
   function pintarPlano(ruta) {
-    const desde = origen().id, hasta = $("#to").value;
-    $("#plano-pins").innerHTML = D.nodos.filter(n => n.plano && n.piso === 0 && n.tipo !== "punto").map(n =>
-      '<button type="button" class="ppin' + (n.tipo === "bano" ? " bano" : "") + (n.id === desde || n.id === hasta ? " sel" : "") +
+    const o = origen(), hasta = destino();
+    const evNodos = new Set(eventos().filter(e => e.estado === "aprobado" && estadoFecha(e) !== "past").map(e => e.lugarInfo.nodo));
+    $("#plano-pins").innerHTML = D.nodos.filter(n => n.plano && n.tipo !== "punto" && n.tipo !== "piso").map(n =>
+      '<button type="button" class="ppin' + (n.tipo === "bano" ? " bano" : "") + (n.id === o.id || (hasta && n.id === hasta.nodo) ? " sel" : "") + (evNodos.has(n.id) ? " conev" : "") +
       '" style="left:' + (n.plano[0] / 643 * 100) + "%;top:" + (n.plano[1] / 490 * 100) + '%" data-n="' + n.id + '" title="' + esc(n.nombre) + '">' + esc(etiquetaCorta(n)) + "</button>").join("");
-    $$("#plano-pins .ppin").forEach(b => b.onclick = () => { $("#to").value = b.dataset.n; pintarPlano(); toast("Destino: " + nodo(b.dataset.n).nombre); calcular(); });
-    let svg = "";
+    $$("#plano-pins .ppin").forEach(b => b.onclick = () => infoSector(b.dataset.n));
+    let s = "";
     if (ruta && ruta.ok) {
       const pts = ruta.nodos.filter(n => n.plano).map(n => n.plano.join(",")).join(" ");
-      const ini = ruta.nodos[0].plano, fin = ruta.nodos[ruta.nodos.length - 1].plano;
-      svg = '<polyline points="' + pts + '" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/>' +
-            '<polyline points="' + pts + '" fill="none" stroke="#2f7bf6" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>' +
-            (ini ? '<circle cx="' + ini[0] + '" cy="' + ini[1] + '" r="7" fill="#2f7bf6" stroke="#fff" stroke-width="3"/>' : "") +
-            (fin ? '<circle cx="' + fin[0] + '" cy="' + fin[1] + '" r="8" fill="#e8890c" stroke="#fff" stroke-width="3"/>' : "");
+      s = '<polyline points="' + pts + '" fill="none" stroke="#fff" stroke-width="9" stroke-linecap="round" stroke-linejoin="round"/><polyline points="' + pts + '" fill="none" stroke="#2f6fe0" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>';
     }
-    $("#plano-svg").innerHTML = svg;
+    $("#plano-svg").innerHTML = s;
   }
+  const etiquetaCorta = n => n.tipo === "bano" ? "WC" : n.id === "entrada" ? "Entrada" : n.id === "coliseo" ? "Coliseo" : n.id === "agora" ? "Ágora" : n.id === "miamicito" ? "Miamicito" : n.bloque === "Biblioteca" ? "Biblioteca" : n.bloque ? n.bloque : n.nombre;
   let ultimaRuta = null;
   $$(".seg-btn").forEach(b => b.onclick = () => {
     $$(".seg-btn").forEach(x => x.classList.toggle("active", x === b));
     const plano = b.dataset.vista === "plano";
-    $("#plano").classList.toggle("hidden", !plano);
-    $("#mapa").classList.toggle("hidden", plano);
-    if (!plano) setTimeout(() => mapa.invalidateSize(), 50);
+    $("#plano").classList.toggle("hidden", !plano); $("#mapa").classList.toggle("hidden", plano);
+    if (!plano) setTimeout(() => { mapa.invalidateSize(); if (ultimosLimites) mapa.fitBounds(ultimosLimites); }, 50);
     pintarPlano(ultimaRuta);
   });
 
   // =====================================================================
-  // UBICACIÓN: en la página web se elige a mano; en la app instalada se usa el GPS
+  // ORIGEN (web: manual; app instalada: GPS) y DESTINO
   // =====================================================================
   const MODO_APP = (window.matchMedia && matchMedia("(display-mode: standalone)").matches) || navigator.standalone === true;
   const GPS_ID = "__gps";
   let posGPS = null, marcadorGPS = null, circuloGPS = null, vigilando = null, ultimaPosRuta = null;
-  function ponerOpcionGPS() {
-    const sel = $("#from");
-    if (!sel.querySelector('option[value="' + GPS_ID + '"]')) {
-      const o = document.createElement("option"); o.value = GPS_ID; o.textContent = "📍 Mi ubicación (GPS)"; sel.insertBefore(o, sel.firstChild);
-    }
+  function opcionesOrigen() {
+    $("#from").innerHTML = (posGPS ? '<option value="' + GPS_ID + '">Mi ubicación (GPS)</option>' : "") +
+      '<optgroup label="Espacios y bloques">' + D.nodos.filter(n => (n.tipo !== "punto" && n.tipo !== "piso") ).sort((a, b) => a.nombre.localeCompare(b.nombre, "es"))
+        .map(n => '<option value="' + n.id + '">' + esc(n.nombre.replace(" · Planta baja", "").replace(" · Piso 1", "")) + "</option>").join("") + "</optgroup>";
   }
-  function actualizarGPS(pos, alPrimerFix) {
+  function ponerOrigen(id) {
+    const n = nodo(id);
+    if (n && n.bloque === "D") { $("#from").value = "D-P0"; $("#from-piso").value = String(n.piso); }
+    else if (n && n.tipo === "piso") { const base = D.nodos.find(x => x.bloque === n.bloque && x.tipo === "bloque"); $("#from").value = base ? base.id : "entrada"; }
+    else $("#from").value = id;
+    $("#from-piso-wrap").classList.toggle("hidden", $("#from").value !== "D-P0");
+  }
+  function origen() {
+    const v = $("#from").value;
+    if (v === GPS_ID && posGPS) return { id: posGPS.nodo, gps: posGPS };
+    if (v === "D-P0") return { id: "D-P" + $("#from-piso").value, gps: null };
+    return { id: v && nodo(v) ? v : "entrada", gps: null };
+  }
+  function destino() {
+    const v = $("#to").value;
+    if (v && v.startsWith("ev:")) { const e = evento(v.slice(3)); if (e) return Object.assign({ evento: e }, e.lugarInfo); }
+    return v ? lugarInfo(v) : null;
+  }
+  $("#from").onchange = () => { $("#from-piso-wrap").classList.toggle("hidden", $("#from").value !== "D-P0"); pintarPlano(ultimaRuta); };
+  $("#from-piso").onchange = () => calcular();
+
+  function actualizarGPS(pos, primero) {
     const lat = pos.coords.latitude, lng = pos.coords.longitude, acc = pos.coords.accuracy || 30;
     const { nodo: n, distancia } = Ruteo.nodoMasCercano(D, lat, lng);
-    if (distancia > 400) {
-      if (alPrimerFix) toast("Tu GPS indica que estás fuera del campus (a " + Math.round(distancia) + " m). Elige tu punto de partida en la lista.");
-      return false;
-    }
+    if (distancia > 400) { if (primero) toast("Tu GPS indica que estás fuera del campus. Elige tu punto de partida en la lista."); return false; }
     posGPS = { lat, lng, acc, nodo: n.id, dist: distancia };
     if (!marcadorGPS) {
-      circuloGPS = L.circle([lat, lng], { radius: acc, color: "#2f7bf6", weight: 1, fillOpacity: .12 }).addTo(mapa);
-      marcadorGPS = L.circleMarker([lat, lng], { radius: 8, color: "#fff", weight: 3, fillColor: "#2f7bf6", fillOpacity: 1 }).addTo(mapa).bindTooltip("Estás aquí");
+      circuloGPS = L.circle([lat, lng], { radius: acc, color: "#2f6fe0", weight: 1, fillOpacity: .12 }).addTo(mapa);
+      marcadorGPS = L.circleMarker([lat, lng], { radius: 8, color: "#fff", weight: 3, fillColor: "#2f6fe0", fillOpacity: 1 }).addTo(mapa).bindTooltip("Estás aquí");
     } else { marcadorGPS.setLatLng([lat, lng]); circuloGPS.setLatLng([lat, lng]).setRadius(acc); }
-    ponerOpcionGPS();
-    if (alPrimerFix) { $("#from").value = GPS_ID; pintarPlano(ultimaRuta); }
-    // Recalcula la ruta si la persona avanzó más de 20 m
+    const sel = $("#from").value; opcionesOrigen(); $("#from").value = primero ? GPS_ID : sel;
+    $("#from-piso-wrap").classList.toggle("hidden", $("#from").value !== "D-P0");
     if ($("#from").value === GPS_ID && ultimaRuta && ultimaRuta.ok && (!ultimaPosRuta || Ruteo.haversine(ultimaPosRuta, posGPS) > 20)) calcular();
     return true;
   }
   function pedirGPS(continuo) {
-    if (!navigator.geolocation) { toast("Este dispositivo no tiene ubicación. Elige tu punto de partida en la lista."); return; }
+    if (!navigator.geolocation) { toast("Este dispositivo no tiene ubicación. Elige tu punto de partida."); return; }
     let primero = true;
-    const ok = pos => { const v = actualizarGPS(pos, primero); if (primero && v) toast("📍 Usando tu ubicación GPS como punto de partida."); if (primero && v && !continuo) calcular(); primero = false; };
-    const err = () => toast("No se pudo obtener tu ubicación. Elige tu punto de partida en la lista o escanea un QR.");
+    const ok = pos => { const v = actualizarGPS(pos, primero); if (primero && v) { toast("Usando tu ubicación GPS como punto de partida."); if (!continuo) calcular(); } primero = false; };
+    const err = () => toast("No se pudo obtener tu ubicación. Elige tu punto de partida en la lista.");
     const opt = { enableHighAccuracy: true, timeout: 10000, maximumAge: 5000 };
-    if (continuo) { if (vigilando === null) vigilando = navigator.geolocation.watchPosition(ok, err, opt); }
-    else navigator.geolocation.getCurrentPosition(ok, err, opt);
+    if (continuo) { if (vigilando === null) vigilando = navigator.geolocation.watchPosition(ok, err, opt); } else navigator.geolocation.getCurrentPosition(ok, err, opt);
   }
-  // Origen real de la ruta: un punto del campus, o el más cercano a la posición GPS
-  function origen() {
-    const v = $("#from").value;
-    if (v === GPS_ID && posGPS) return { id: posGPS.nodo, gps: posGPS };
-    return { id: v === GPS_ID ? "entrada" : v, gps: null };
-  }
-  const nombreOrigen = () => origen().gps ? "tu ubicación" : nodo(origen().id).nombre;
-  // Agrega a la ruta el tramo desde la posición GPS hasta el punto más cercano
+  $("#btn-gps").onclick = () => pedirGPS(MODO_APP);
   function conTramoGPS(r, o) {
     if (!r.ok || !o.gps || o.gps.dist < 8) return r;
     const d = Math.round(o.gps.dist);
-    return Object.assign({}, r, {
-      metros: r.metros + d, segundos: r.segundos + Math.round(d / 1.2), minutos: Math.max(1, Math.round((r.segundos + d / 1.2) / 60)),
-      pasos: [{ icono: "📍", texto: "Desde tu ubicación, camina " + d + " m hasta " + nodo(o.id).nombre }].concat(r.pasos), inicioGPS: [o.gps.lat, o.gps.lng],
-    });
+    return Object.assign({}, r, { metros: r.metros + d, segundos: r.segundos + Math.round(d / 1.2), minutos: Math.max(1, Math.round((r.segundos + d / 1.2) / 60)),
+      pasos: [{ icono: "gps", texto: "Desde tu ubicación, camina " + d + " m hasta " + nodo(o.id).nombre }].concat(r.pasos), inicioGPS: [o.gps.lat, o.gps.lng] });
   }
 
   // =====================================================================
   // RUTAS
   // =====================================================================
-  const ordenNodos = D.nodos.slice().sort((a, b) => a.nombre.localeCompare(b.nombre, "es"));
-  function opciones(sel, filtro) {
-    sel.innerHTML = ordenNodos.filter(filtro || (() => true)).map(n => '<option value="' + n.id + '">' + (n.tipo === "bano" ? "🚻 " : "") + esc(n.nombre) + "</option>").join("");
-  }
-  opciones($("#from")); opciones($("#to"));
-  opciones($("#ev-lugar"), n => n.tipo !== "bano");
-  opciones($("#cl-aula"), n => n.tipo !== "bano");
   const modo = () => document.querySelector('input[name="modo"]:checked').value;
   const setModo = m => { const r = document.querySelector('input[name="modo"][value="' + m + '"]'); if (r) r.checked = true; };
   const modoPreferido = () => leer("siempre_accesible", false) ? "accesible" : "corta";
+  function rutaA(lugarNodo, m, o) { o = o || origen(); return conTramoGPS(Ruteo.ruta(D, o.id, lugarNodo, m, opcionesRuta()), o); }
 
-  let capaRuta = null;
+  let capaRuta = null, ultimosLimites = null;
   function dibujarRuta(r) {
     ultimaRuta = r;
     if (capaRuta) { mapa.removeLayer(capaRuta); capaRuta = null; }
     pintarPlano(r);
     if (!r || !r.ok) return;
-    let coords = [];
-    if (r.inicioGPS) coords.push(r.inicioGPS);
-    r.tramos.forEach((t, i) => { const g = geometria(t.arista, t.desde.id); coords = coords.concat(i > 0 ? g.slice(1) : g); });
+    const coords = (r.inicioGPS ? [r.inicioGPS] : []).concat(r.nodos.map(n => [n.lat, n.lng]));
     capaRuta = L.layerGroup([
-      L.polyline(coords, { color: "#fff", weight: 11, opacity: .95 }),
-      L.polyline(coords, { color: "#2f7bf6", weight: 6 }),
-      L.circleMarker(coords[0], { radius: 8, color: "#fff", weight: 3, fillColor: "#2f7bf6", fillOpacity: 1 }),
+      L.polyline(coords, { color: "#fff", weight: 11, opacity: .95 }), L.polyline(coords, { color: "#2f6fe0", weight: 6 }),
+      L.circleMarker(coords[0], { radius: 8, color: "#fff", weight: 3, fillColor: "#2f6fe0", fillOpacity: 1 }),
       L.circleMarker(coords[coords.length - 1], { radius: 9, color: "#fff", weight: 3, fillColor: "#e8890c", fillOpacity: 1 }),
     ]).addTo(mapa);
-    if (!$("#mapa").classList.contains("hidden")) mapa.fitBounds(L.latLngBounds(coords).pad(0.4));
+    ultimosLimites = L.latLngBounds(coords).pad(0.4);
+    if (!$("#mapa").classList.contains("hidden") && $("#mapa").offsetWidth) mapa.fitBounds(ultimosLimites);
   }
-
-  function pintarResultado(r, m, extra) {
+  function htmlPasos(r, dest) {
+    const final = dest && dest.aula ? "Llegaste. " + dest.aula.nombre + " está en " + nombrePiso(dest.aula.piso).toLowerCase() + " del " + (dest.aula.bloque === "Biblioteca" ? "edificio de la Biblioteca" : "Bloque " + dest.aula.bloque) + "." : "Llegaste a " + (dest ? dest.nombre : r.destino.nombre) + ".";
+    return "<ol class='pasos'>" + r.pasos.map(p => "<li>" + svg(p.icono) + "<span>" + esc(p.texto) + "</span></li>").join("") + "<li>" + svg("meta") + "<span>" + esc(final) + "</span></li></ol>";
+  }
+  function calcular() {
+    const dest = destino(); if (!dest) return;
+    const o = origen(), m = modo();
+    if (o.gps) ultimaPosRuta = { lat: o.gps.lat, lng: o.gps.lng };
+    actualizarURL();
+    const r = rutaA(dest.nodo, m, o);
     const out = $("#route-result");
     dibujarRuta(r);
+    const titulo = dest.evento ? '<div class="res-ev">' + esc(dest.evento.nombre) + "<small>" + esc(dest.direccion) + " · " + fmtHora(dest.evento.inicio) + "–" + fmtHora(dest.evento.fin) + "</small></div>" : '<div class="res-ev">' + esc(dest.direccion) + "</div>";
     if (!r.ok) {
-      out.innerHTML = '<div class="aviso ' + (r.mismoLugar ? "info" : "error") + '"><b>' + (m === "accesible" && !r.mismoLugar ? "♿ " : "") + esc(r.motivo) + "</b>" + (extra || "") + "</div>";
+      let extra = "";
+      if (m === "accesible" && !r.mismoLugar) { const alt = rutaA(dest.nodo, "corta", o); extra = alt.ok ? "<br>Existe una ruta con gradas de " + alt.metros + " m. Coordine asistencia con el organizador o la administración." : ""; }
+      out.innerHTML = titulo + '<div class="aviso ' + (r.mismoLugar ? "info" : "error") + '">' + esc(r.motivo) + extra + "</div>";
       return;
     }
-    const d = r.destino;
-    out.innerHTML = '<div class="resumen">' + r.metros + " m · " + r.minutos + " min</div>" +
-      '<div class="muted">Hasta <b>' + esc(d.nombre) + "</b> · subida +" + r.subida_m + " m" + (r.bajada_m ? " · bajada −" + r.bajada_m + " m" : "") + "</div>" + (extra || "") +
-      "<ol>" + r.pasos.map(p => "<li><span>" + p.icono + "</span><span>" + esc(p.texto) + "</span></li>").join("") +
-      "<li><span>🏁</span><span>Llegaste a " + esc(d.nombre) + "</span></li></ol>";
+    let comp = "";
+    if (m === "corta" && r.usaEscaleras) {
+      const acc = rutaA(dest.nodo, "accesible", o);
+      comp = acc.ok ? '<div class="aviso info">Esta ruta incluye gradas. Con rampas: ' + acc.metros + " m (+" + Math.max(0, acc.metros - r.metros) + ' m). <button class="link" id="ver-acc" type="button">Ver ruta con rampas</button></div>'
+                    : '<div class="aviso error">Este destino no tiene ruta sin gradas disponible.</div>';
+    } else if (m === "accesible") comp = '<div class="aviso ok">Ruta sin gradas' + (r.usaAscensor ? ", con ascensor" : "") + ".</div>";
+    else comp = '<div class="aviso ok">Ruta sin gradas.</div>';
+    out.innerHTML = titulo + '<div class="resumen">' + r.metros + ' m <span>· ' + r.minutos + " min a pie</span></div>" + comp + htmlPasos(r, dest);
+    const b = $("#ver-acc"); if (b) b.onclick = () => { setModo("accesible"); calcular(); };
   }
-
-  function calcular() {
-    const o = origen(), desde = o.id, hasta = $("#to").value, m = modo();
-    actualizarURL();
-    if (o.gps) ultimaPosRuta = { lat: o.gps.lat, lng: o.gps.lng };
-    const r = conTramoGPS(Ruteo.ruta(D, desde, hasta, m, opcionesRuta()), o);
-    let extra = "";
-    if (!r.ok && m === "accesible" && !r.mismoLugar) {
-      const alt = conTramoGPS(Ruteo.ruta(D, desde, hasta, "corta", opcionesRuta()), o);
-      extra = "<br>" + (alt.ok ? "El único acceso disponible tiene gradas (" + alt.metros + " m). " : "") + "Contacta al organizador para trasladar la actividad o coordinar asistencia.";
-    } else if (r.ok && m !== "accesible" && r.usaEscaleras) {
-      const acc = conTramoGPS(Ruteo.ruta(D, desde, hasta, "accesible", opcionesRuta()), o);
-      extra = acc.ok
-        ? '<div class="aviso info">♿ Esta ruta tiene gradas. Sin gradas: ' + acc.metros + " m · " + acc.minutos + " min" + (acc.metros > r.metros ? " (+" + (acc.metros - r.metros) + " m)" : "") + ' <button class="secondary" id="btn-ver-acc" type="button">Ver</button></div>'
-        : '<div class="aviso error">♿ Este destino no tiene ruta sin gradas disponible.</div>';
-    } else if (r.ok && m === "accesible") {
-      extra = '<div class="aviso ok">♿ Ruta sin gradas' + (r.usaAscensor ? ", usa ascensor" : "") + ".</div>";
-    }
-    pintarResultado(r, m, extra);
-    const b = $("#btn-ver-acc"); if (b) b.onclick = () => { setModo("accesible"); calcular(); };
-  }
-  function irRuta(lugar) {
-    $("#to").value = lugar;
-    if ($("#from").value === lugar) $("#from").value = posGPS ? GPS_ID : "entrada";
-    setModo(modoPreferido()); irA("map"); calcular();
-  }
-  function banoMasCercano() {
-    const m = modo(), acc = m === "accesible";
-    const o = origen(), r = conTramoGPS(Ruteo.rutaAlMasCercano(D, o.id, n => n.tipo === "bano" && (!acc || n.accesible), m, opcionesRuta()), o);
-    if (r.ok) $("#to").value = r.destino.id;
-    pintarResultado(r, m, r.ok ? '<div class="aviso info">🚻 Baño más cercano' + (acc ? " accesible" : "") + "</div>" : "");
-  }
+  function irEvento(id, m) { opcionesDestino(); $("#to").value = "ev:" + id; setModo(m || modoPreferido()); irA("map"); calcular(); }
+  function irLugar(id, m) { opcionesDestino(); $("#to").value = id; setModo(m || modoPreferido()); irA("map"); calcular(); }
+  function opcionesDestino() { const v = $("#to").value; $("#to").innerHTML = opcionesLugar(true); if (v && [...$("#to").options].some(o => o.value === v)) $("#to").value = v; }
   $("#route-btn").onclick = calcular;
-  $("#btn-bano").onclick = banoMasCercano;
-  $$('input[name="modo"]').forEach(r => r.onchange = () => calcular());
-  $("#from").onchange = () => { pintarPlano(ultimaRuta); pintarHorario(); };
-  $("#to").onchange = () => pintarPlano(ultimaRuta);
-
-  $("#btn-gps").onclick = () => pedirGPS(MODO_APP);
-  // Tocar un lugar vacío del mapa: "Estoy aquí" (punto más cercano) o "Voy aquí"
-  mapa.on("click", e => {
-    const { nodo: n } = Ruteo.nodoMasCercano(D, e.latlng.lat, e.latlng.lng);
-    L.popup().setLatLng(e.latlng).setContent("Punto más cercano:<br><b>" + esc(n.nombre) + '</b><div class="pop-acc"><button class="secondary" data-desde="' + n.id + '">Estoy aquí</button><button class="primary" data-hasta="' + n.id + '">Voy aquí</button></div>').openOn(mapa);
-  });
-
-  // ---------- Enlaces y compartir ----------
-  const urlBase = () => location.href.split("?")[0].split("#")[0];
-  function urlRuta(desde, hasta, m) {
-    const p = new URLSearchParams();
-    if (desde) p.set("desde", desde); if (hasta) p.set("hasta", hasta); if (m && m !== "corta") p.set("modo", m);
-    const q = p.toString(); return urlBase() + (q ? "?" + q : "");
-  }
-  function actualizarURL() { try { history.replaceState(null, "", urlRuta($("#from").value === GPS_ID ? null : $("#from").value, $("#to").value, modo())); } catch (e) {} }
-  $("#btn-compartir").onclick = () => {
-    const url = urlRuta(null, $("#to").value, modo());
-    if (navigator.share) navigator.share({ title: "UCB Events", text: "Así llegas:", url }).catch(() => {});
-    else window.open("https://wa.me/?text=" + encodeURIComponent("Así llegas: " + url), "_blank");
+  $("#to").onchange = calcular;
+  $$('input[name="modo"]').forEach(r => r.onchange = calcular);
+  $("#btn-bano").onclick = () => {
+    const m = modo(), acc = m === "accesible", o = origen();
+    const r = conTramoGPS(Ruteo.rutaAlMasCercano(D, o.id, n => n.tipo === "bano" && (!acc || n.accesible), m, opcionesRuta()), o);
+    dibujarRuta(r);
+    $("#route-result").innerHTML = r.ok ? '<div class="res-ev">Baño más cercano' + (acc ? " accesible" : "") + "<small>" + esc(r.destino.nombre) + '</small></div><div class="resumen">' + r.metros + " m <span>· " + r.minutos + " min</span></div>" + htmlPasos(r, null) : '<div class="aviso error">' + esc(r.motivo) + "</div>";
   };
+  const urlBase = () => location.href.split("?")[0].split("#")[0];
+  function actualizarURL() { try { const v = $("#to").value; const p = new URLSearchParams(); if (v.startsWith("ev:")) p.set("evento", v.slice(3)); else p.set("hasta", v); if (modo() !== "corta") p.set("modo", modo()); history.replaceState(null, "", urlBase() + "?" + p); } catch (e) {} }
+  $("#btn-compartir").onclick = () => { const url = location.href; if (navigator.share) navigator.share({ title: "UCB Events", text: "Ruta en el campus UCB:", url }).catch(() => {}); else window.open("https://wa.me/?text=" + encodeURIComponent("Ruta en el campus UCB: " + url), "_blank"); };
 
   // =====================================================================
-  // EVENTOS (tarjetas)
+  // EVENTOS (vista pública)
   // =====================================================================
-  function linkCalendar(titulo, ini, fin, lugarId, recur) {
+  function linkCalendar(e) {
     const f = d => d.getFullYear() + pad(d.getMonth() + 1) + pad(d.getDate()) + "T" + pad(d.getHours()) + pad(d.getMinutes()) + "00";
-    const l = nodo(lugarId);
-    return "https://calendar.google.com/calendar/render?action=TEMPLATE&text=" + encodeURIComponent(titulo) + "&dates=" + f(ini) + "/" + f(fin) +
-      "&ctz=America/La_Paz&location=" + encodeURIComponent((l ? l.nombre : "") + ", UCB La Paz") +
-      "&details=" + encodeURIComponent("Cómo llegar: " + urlRuta(null, lugarId)) + (recur ? "&recur=" + encodeURIComponent(recur) : "");
+    return "https://calendar.google.com/calendar/render?action=TEMPLATE&text=" + encodeURIComponent(e.nombre) + "&dates=" + f(new Date(e.inicio)) + "/" + f(new Date(e.fin)) +
+      "&ctz=America/La_Paz&location=" + encodeURIComponent(e.lugarInfo.direccion + ", UCB La Paz") + "&details=" + encodeURIComponent("Cómo llegar: " + urlBase() + "?evento=" + e.id);
   }
-  const accesibleDesdeIngreso = lugar => lugar === "entrada" || Ruteo.ruta(D, "entrada", lugar, "accesible", opcionesRuta()).ok;
-  const clavePersona = p => (p.codigo || p.nombre || "").toString().trim().toLowerCase();
-  const yaAsistio = id => { const p = perfil(); return !!p && asistentes(id).some(x => clavePersona(x) === clavePersona(p)); };
-
+  const yaAsistio = id => { const p = leer("perfil", null); return !!p && asistentes(id).some(x => (x.codigo || x.nombre).toLowerCase() === (p.codigo || p.nombre).toLowerCase()); };
   function render() {
-    const q = $("#search").value.toLowerCase().trim(), cat = $("#category").value, fil = $("#date-filter").value;
-    const seguidos = leer("seguidos", []);
-    const lista = eventos().filter(ev => {
-      if (ev.estado !== "aprobado" && !puedeGestionar(ev)) return false;
-      const l = nodo(ev.lugar);
-      const texto = (ev.nombre + " " + (l ? l.nombre : "") + " " + (ev.descripcion || "") + " " + ev.organizador).toLowerCase();
-      const st = estadoFecha(ev);
-      return (!q || texto.includes(q)) && (!cat || ev.categoria === cat) && (fil === "all" || (fil === "past" ? st === "past" : st !== "past"));
-    }).sort((a, b) => {
-      const ap = estadoFecha(a) === "past", bp = estadoFecha(b) === "past";
-      if (ap !== bp) return ap ? 1 : -1;
-      return ap ? b.inicio.localeCompare(a.inicio) : a.inicio.localeCompare(b.inicio);
-    });
+    const q = $("#search").value.toLowerCase().trim(), cat = $("#category").value, fil = $("#date-filter").value, seg = leer("seguidos", []);
+    const lista = eventosVisibles().filter(ev => {
+      const t = (ev.nombre + " " + ev.lugarInfo.direccion + " " + (ev.descripcion || "") + " " + ev.organizador).toLowerCase(), st = estadoFecha(ev);
+      return (!q || t.includes(q)) && (!cat || ev.categoria === cat) && (fil === "all" || (fil === "past" ? st === "past" : st !== "past"));
+    }).sort((a, b) => { const ap = estadoFecha(a) === "past", bp = estadoFecha(b) === "past"; if (ap !== bp) return ap ? 1 : -1; return ap ? b.inicio.localeCompare(a.inicio) : a.inicio.localeCompare(b.inicio); });
     $("#event-count").textContent = lista.length + " evento(s)";
-    $("#event-list").innerHTML = lista.length ? lista.map(ev => {
-      const l = nodo(ev.lugar), st = estadoFecha(ev), past = st === "past";
-      const niv = nivelAforo(ev.aforo_pct), acc = accesibleDesdeIngreso(ev.lugar);
-      const ocup = ev.aforo_auto ? ev.asistentes_n + " / " + ev.capacidad + " asistentes" : (ev.aforo_pct == null ? "Aforo sin dato" : niv.t) + (ev.capacidad ? " · cap. " + ev.capacidad : "");
+    const m = modoPreferido();
+    $("#event-list").innerHTML = lista.map(ev => {
+      const st = estadoFecha(ev), past = st === "past", pct = ev.capacidad ? Math.min(100, Math.round(ev.actual / ev.capacidad * 100)) : 0;
+      const r = past ? null : rutaA(ev.lugarInfo.nodo, m);
+      const rAcc = past ? null : rutaA(ev.lugarInfo.nodo, "accesible");
+      const ruta = past ? "" : '<div class="ev-ruta">' + svg("camino") + "<span>" + (r && r.ok ? "<b>" + r.metros + " m</b> desde " + esc(origenTexto()) + " · " + r.minutos + " min" : "Sin ruta disponible") + "</span>" +
+        (rAcc && rAcc.ok ? '<span class="tag-ok">Accesible con rampas</span>' : '<span class="tag-acc">Sin acceso sin gradas</span>') + "</div>";
       return '<article class="event-card ' + (past ? "past-event" : "") + '">' +
-        '<div class="event-top"><span class="category-tag">' + esc(ev.categoria || "Evento") + '</span><span class="date-badge ' + (past ? "past" : st === "today" ? "today" : "") + '">' + ETQ_FECHA[st] + "</span></div>" +
-        "<h3>" + esc(ev.nombre) + "</h3>" +
-        (ev.estado === "pendiente" ? '<span class="tag-pend">Pendiente de aprobación</span>' : "") +
-        '<div class="event-meta">📅 ' + fmtFecha(ev.inicio) + " · " + fmtHora(ev.inicio) + "<br>📍 " + esc(l ? l.nombre : ev.lugar) + "<br>🎙️ " + esc(ev.organizador) +
-        (ev.descripcion ? "<br>" + esc(ev.descripcion) : "") + "</div>" +
-        (acc ? "" : '<span class="tag-acc">♿ Sin acceso sin gradas registrado</span>') +
-        '<div class="occupancy"><span class="' + niv.c + '" style="width:' + (ev.aforo_pct || 0) + '%"></span></div>' +
-        '<div class="occupancy-label"><span>' + ocup + "</span><b>" + (ev.aforo_pct == null ? "—" : ev.aforo_pct + "%") + "</b></div>" +
-        '<div class="card-actions">' +
-          '<button class="secondary" data-vermapa="' + ev.lugar + '" type="button">Ver en mapa</button>' +
-          (past ? '<button class="secondary" disabled type="button">Evento finalizado</button>' : '<button class="primary" data-route="' + ev.lugar + '" type="button">Cómo llegar</button>') +
-        "</div>" +
-        (past ? "" : '<div class="card-actions">' +
-          '<a class="secondary" target="_blank" rel="noopener" href="' + linkCalendar(ev.nombre, new Date(ev.inicio), new Date(ev.fin || ev.inicio), ev.lugar) + '">+ Calendar</a>' +
-          (tieneCuenta() ? '<button class="secondary" data-seguir="' + ev.id + '" type="button">' + (seguidos.includes(ev.id) ? "✓ Siguiendo" : "🔔 Seguir") + "</button>" : "") +
-          '<button class="secondary" data-qrev="' + ev.id + '" type="button">QR del evento</button>' +
-          (ev.asistencia && ev.estado === "aprobado" ? (yaAsistio(ev.id) ? '<span class="tag-ok">✅ Asistencia registrada</span>' : '<button class="secondary" data-marcar="' + ev.id + '" type="button">✅ Registrar asistencia</button>') : "") +
-          (puedeGestionar(ev) ? '<button class="primary" data-gest="' + ev.id + '" type="button">Gestionar</button>' : "") +
-        "</div>") +
-        "</article>";
-    }).join("") : '<p class="muted">No se encontraron eventos.</p>';
-
-    $$("[data-vermapa]").forEach(b => b.onclick = () => { $("#to").value = b.dataset.vermapa; irA("map"); const n = nodo(b.dataset.vermapa); mapa.setView([n.lat, n.lng], 19); pintarPlano(ultimaRuta); });
-    $$("[data-route]").forEach(b => b.onclick = () => irRuta(b.dataset.route));
-    $$("[data-seguir]").forEach(b => b.onclick = () => {
-      const s = new Set(leer("seguidos", [])); s.has(b.dataset.seguir) ? s.delete(b.dataset.seguir) : s.add(b.dataset.seguir);
-      guardar("seguidos", [...s]);
-      if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {});
-      render();
-    });
-    $$("[data-qrev]").forEach(b => b.onclick = () => qrEvento(b.dataset.qrev));
+        '<div class="event-top"><span class="category-tag">' + esc(ev.categoria) + '</span><span class="estado ' + st + '">' + ETQ[st] + "</span></div>" +
+        "<h3>" + esc(ev.nombre) + "</h3>" + (ev.estado === "pendiente" ? '<span class="tag-pend">Reserva pendiente de aprobación</span>' : "") +
+        '<dl class="ev-datos"><dt>Fecha</dt><dd>' + fmtFecha(ev.inicio) + " · " + fmtHora(ev.inicio) + "–" + fmtHora(ev.fin) + "</dd><dt>Lugar</dt><dd>" + esc(ev.lugarInfo.direccion) + "</dd><dt>Organiza</dt><dd>" + esc(ev.organizador) + "</dd></dl>" +
+        (ev.descripcion ? '<p class="ev-desc">' + esc(ev.descripcion) + "</p>" : "") + ruta +
+        '<div class="occupancy"><span style="width:' + pct + '%"></span></div><div class="occupancy-label"><span>Asistentes: ' + ev.actual + " · esperados " + (ev.esperados || "—") + " · capacidad " + ev.capacidad + "</span><b>" + pct + "%</b></div>" +
+        '<div class="card-actions">' + (past ? '<button class="secondary" disabled type="button">Evento finalizado</button>' :
+          '<button class="primary" data-irev="' + ev.id + '" type="button">Cómo llegar</button><a class="secondary" target="_blank" rel="noopener" href="' + linkCalendar(ev) + '">Agregar al calendario</a>' +
+          '<button class="secondary" data-seguir="' + ev.id + '" type="button">' + (seg.includes(ev.id) ? "Recibiendo avisos" : "Recibir avisos") + "</button>" +
+          (ev.registro === "qr" && ev.estado === "aprobado" ? (yaAsistio(ev.id) ? '<span class="tag-ok">Asistencia registrada</span>' : '<button class="secondary" data-marcar="' + ev.id + '" type="button">Registrar asistencia</button>') : "") +
+          (puedeGestionar(ev) ? '<button class="secondary" data-gest="' + ev.id + '" type="button">Gestionar</button>' : "")) + "</div></article>";
+    }).join("") || '<p class="muted">No se encontraron eventos.</p>';
+    $$("[data-irev]").forEach(b => b.onclick = () => irEvento(b.dataset.irev));
+    $$("[data-seguir]").forEach(b => b.onclick = () => { const s = new Set(leer("seguidos", [])); s.has(b.dataset.seguir) ? s.delete(b.dataset.seguir) : s.add(b.dataset.seguir); guardar("seguidos", [...s]); if ("Notification" in window && Notification.permission === "default") Notification.requestPermission().catch(() => {}); render(); });
     $$("[data-marcar]").forEach(b => b.onclick = () => pedirCodigo(b.dataset.marcar));
-    $$("[data-gest]").forEach(b => b.onclick = () => gestionar(b.dataset.gest, "aforo"));
-    renderManageList();
+    $$("#event-list [data-gest]").forEach(b => b.onclick = () => gestionar(b.dataset.gest, "aforo"));
   }
+  const origenTexto = () => { const o = origen(); return o.gps ? "tu ubicación" : nodo(o.id).nombre; };
   $("#search").oninput = render; $("#category").onchange = render; $("#date-filter").onchange = render;
 
   // =====================================================================
-  // PANEL DE ORGANIZADORES (login, crear, editar, eliminar, gestionar)
+  // AULAS: disponibilidad
   // =====================================================================
-  $("#login-form").onsubmit = e => {
-    e.preventDefault();
-    const f = new FormData(e.target), u = f.get("username").trim().toLowerCase(), c = CUENTAS[u];
-    if (c && f.get("password") === c.clave) {
-      cambiarSesion({ rol: c.rol, usuario: u, nombre: c.nombre });
-      $("#login-message").textContent = ""; e.target.reset();
-      toast("Bienvenido/a, " + c.nombre + ".");
-    } else $("#login-message").textContent = "Usuario o contraseña incorrectos.";
-  };
-  $("#logout-btn").onclick = () => { cerrarSesion(); resetForm(); };
+  const FRANJAS = [["07:00", "08:30"], ["08:45", "10:15"], ["10:30", "12:00"], ["12:15", "13:45"], ["14:00", "15:30"], ["15:45", "17:15"], ["17:30", "19:00"], ["19:15", "20:45"]];
+  const MATERIAS = ["Cálculo I", "Cálculo II", "Física I", "Programación", "Estadística", "Ética", "Contabilidad", "Psicología General", "Derecho Civil", "Microeconomía", "Álgebra Lineal", "Comunicación", "Teología", "Electrónica", "Química General", "Marketing"];
+  const hash = s => { let h = 2166136261; for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); } return h >>> 0; };
+  const aMin = t => { const [h, m] = t.split(":").map(Number); return h * 60 + m; };
+  function horarioAula(a, dia) {
+    const cl = FRANJAS.map(([i, f], k) => {
+      const h = hash(a.id + ":" + dia + ":" + k) % 100, lim = /Auditorio|Paraninfo|Sala de estudio/.test(a.nombre) ? 18 : dia === 6 ? 25 : 58;
+      return h < lim ? { i, f, tipo: "clase", titulo: /Sala de estudio/.test(a.nombre) ? "Grupo de estudio reservado" : MATERIAS[hash(a.id + dia + k) % MATERIAS.length] } : null;
+    }).filter(Boolean);
+    const evs = eventos().filter(e => e.lugar === a.id && e.estado === "aprobado" && new Date(e.inicio).getDay() === dia && estadoFecha(e) !== "past")
+      .map(e => ({ i: e.inicio.slice(11, 16), f: e.fin.slice(11, 16), tipo: "evento", titulo: e.nombre }));
+    return cl.concat(evs).sort((x, y) => aMin(x.i) - aMin(y.i));
+  }
+  function estadoAula(a, dia, hora) {
+    const h = horarioAula(a, dia), t = aMin(hora);
+    const actual = h.find(x => aMin(x.i) <= t && t < aMin(x.f));
+    if (actual) return { libre: false, texto: (actual.tipo === "evento" ? "Evento: " : "") + actual.titulo, hasta: actual.f };
+    const sig = h.find(x => aMin(x.i) > t);
+    return { libre: true, texto: sig ? "Libre hasta las " + sig.i : "Libre el resto del día", hasta: sig ? sig.i : null };
+  }
+  function prepararFiltrosAulas() {
+    const bloques = [...new Set(D.aulas.map(a => a.bloque))];
+    $("#au-bloque").innerHTML = '<option value="">Todos los bloques</option>' + bloques.map(b => '<option value="' + b + '">' + (b === "Biblioteca" ? "Biblioteca" : "Bloque " + b) + "</option>").join("");
+    const d = new Date(); $("#au-dia").value = String(d.getDay() === 0 ? 1 : d.getDay()); $("#au-hora").value = pad(d.getHours()) + ":" + pad(d.getMinutes());
+    $("#au-bloque").onchange = () => { pisosAulas(); pintarAulas(); };
+    ["#au-piso", "#au-dia", "#au-hora", "#au-estado"].forEach(s => $(s).onchange = pintarAulas);
+    pisosAulas();
+  }
+  function pisosAulas() {
+    const b = $("#au-bloque").value, pisos = [...new Set(D.aulas.filter(a => !b || a.bloque === b).map(a => a.piso))].sort((x, y) => x - y);
+    $("#au-piso").innerHTML = '<option value="">Todos los pisos</option>' + pisos.map(p => '<option value="' + p + '">' + nombrePiso(p) + "</option>").join("");
+  }
+  function pintarAulas() {
+    const b = $("#au-bloque").value, p = $("#au-piso").value, dia = +$("#au-dia").value, hora = $("#au-hora").value || "10:00", solo = $("#au-estado").value === "libre";
+    const lista = D.aulas.filter(a => (!b || a.bloque === b) && (p === "" || a.piso === +p)).map(a => ({ a, e: estadoAula(a, dia, hora) })).filter(x => !solo || x.e.libre);
+    $("#aulas-resumen").textContent = lista.filter(x => x.e.libre).length + " libres de " + lista.length;
+    $("#aulas-lista").innerHTML = lista.map(({ a, e }) => '<button class="aula-card ' + (e.libre ? "libre" : "ocupada") + '" data-aula="' + a.id + '" type="button">' +
+      "<span class='aula-nom'>" + esc(a.nombre) + "</span><span class='aula-ub'>" + (a.bloque === "Biblioteca" ? "Biblioteca" : "Bloque " + a.bloque) + " · " + nombrePiso(a.piso) + " · " + a.capacidad + " pers.</span>" +
+      "<span class='aula-est'>" + (e.libre ? "Libre" : "Ocupada") + "</span><span class='aula-txt'>" + esc(e.texto) + (e.libre ? "" : " · hasta " + e.hasta) + "</span></button>").join("") || '<p class="muted">Sin aulas para este filtro.</p>';
+    $$("[data-aula]").forEach(x => x.onclick = () => detalleAula(x.dataset.aula, dia));
+  }
+  function detalleAula(id, dia) {
+    const a = aula(id), h = horarioAula(a, dia), dias = ["", "Lunes", "Martes", "Miércoles", "Jueves", "Viernes", "Sábado"];
+    abrirModal("<h3>" + esc(a.nombre) + '</h3><p class="muted">' + esc(lugarInfo(id).direccion) + " · capacidad " + a.capacidad + "</p>" +
+      '<h4 class="left">' + dias[dia] + '</h4><ul class="franjas">' + FRANJAS.map(([i, f]) => { const o = h.find(x => x.i === i); return '<li class="' + (o ? o.tipo : "libre") + '"><b>' + i + "–" + f + "</b><span>" + esc(o ? o.titulo : "Libre") + "</span></li>"; }).join("") +
+      h.filter(x => x.tipo === "evento" && !FRANJAS.some(f => f[0] === x.i)).map(x => '<li class="evento"><b>' + x.i + "–" + x.f + "</b><span>" + esc(x.titulo) + "</span></li>").join("") +
+      '</ul><button class="primary full" id="ir-aula" type="button">Cómo llegar a ' + esc(a.nombre) + "</button>");
+    $("#ir-aula").onclick = () => { cerrarModal(); irLugar(id); };
+  }
 
-  function pintarPanelOrg() {
-    const dentro = esGestor();
-    $("#organizer-login").classList.toggle("hidden", dentro);
-    $("#organizer-panel").classList.toggle("hidden", !dentro);
-    if (dentro) $("#org-saludo").innerHTML = "Sesión: <b>" + esc(sesion.nombre) + "</b> (" + ROL_TXT[sesion.rol].toLowerCase() + "). " +
-      (sesion.rol === "admin" ? "Puedes gestionar todos los eventos y aprobar los pendientes." : "Puedes gestionar tus eventos; los nuevos quedan pendientes hasta que un administrador los apruebe.");
+  // =====================================================================
+  // CAMPUS E HISTORIA
+  // =====================================================================
+  function pintarCampus() {
+    $("#historia-ucb").textContent = D.historia;
+    $("#sectores").innerHTML = Object.keys(D.sectores).map(k => {
+      const s = D.sectores[k], n = D.nodos.find(x => x.sector === k && x.tipo !== "piso");
+      return '<article class="sector"><h3>' + esc(s.titulo) + "</h3><p>" + esc(s.texto) + "</p>" + (n ? '<button class="secondary" data-sec="' + n.id + '" type="button">Ver en el mapa</button>' : "") + "</article>";
+    }).join("");
+    $$("[data-sec]").forEach(b => b.onclick = () => { irA("map"); const n = nodo(b.dataset.sec); mapa.setView([n.lat, n.lng], 19); popupLugar(n); });
   }
-  function resetForm() {
-    const f = $("#event-form"); f.reset(); f.elements.id.value = "";
-    $("#form-title").textContent = "Crear un evento"; $("#save-event-btn").textContent = "Guardar evento";
-    $("#cancel-edit-btn").classList.add("hidden"); $("#form-message").textContent = "";
+  function infoSector(id) {
+    const n = nodo(id), s = n.sector && D.sectores[n.sector];
+    abrirModal("<h3>" + esc(s ? s.titulo : n.nombre) + '</h3><p class="left">' + esc(s ? s.texto : "") + '</p><button class="primary full" id="ir-sec" type="button">Cómo llegar</button>');
+    $("#ir-sec").onclick = () => { cerrarModal(); irLugar(id); };
   }
+
+  // =====================================================================
+  // ORGANIZADORES: crear / editar y gestionar
+  // =====================================================================
+  function prepararForm() {
+    $("#ev-lugar").innerHTML = '<option value="">Seleccionar lugar</option>' + opcionesLugar(false);
+    $("#ev-lugar").onchange = rutaPrevia;
+    const admin = sesion.rol === "admin";
+    $("#save-event-btn").textContent = admin ? "Publicar evento" : "Enviar solicitud";
+    $("#form-nota").textContent = admin ? "Como administrador, el evento se publica de inmediato." : "Los eventos de organizadores se envían como solicitud de reserva y se publican cuando la administración los aprueba.";
+  }
+  function rutaPrevia() {
+    const v = $("#ev-lugar").value; if (!v) { $("#ruta-previa").innerHTML = ""; return; }
+    const li = lugarInfo(v), r = Ruteo.ruta(D, "entrada", li.nodo, "corta", opcionesRuta()), a = Ruteo.ruta(D, "entrada", li.nodo, "accesible", opcionesRuta());
+    $("#ruta-previa").innerHTML = "<b>Ruta generada automáticamente</b> desde la entrada principal hasta " + esc(li.direccion) + ": " + (r.ok ? r.metros + " m" : "sin ruta") + " · con rampas: " + (a.ok ? a.metros + " m" : "no disponible");
+  }
+  function resetForm() { const f = $("#event-form"); f.reset(); f.elements.id.value = ""; $("#form-title").textContent = sesion.rol === "admin" ? "Crear evento" : "Solicitar un evento"; $("#cancel-edit-btn").classList.add("hidden"); $("#ruta-previa").innerHTML = ""; prepararForm(); }
   $("#cancel-edit-btn").onclick = resetForm;
-
-  function renderManageList() {
-    const box = $("#manage-event-list");
-    if (!esGestor()) { box.innerHTML = ""; return; }
-    const mios = eventos().filter(puedeGestionar).sort((a, b) => b.inicio.localeCompare(a.inicio));
-    box.innerHTML = mios.length ? mios.map(ev => '<div class="manage-row"><div class="manage-info"><b>' + esc(ev.nombre) + "</b><span>" +
-      fmtFecha(ev.inicio) + " " + fmtHora(ev.inicio) + " · " + ETQ_FECHA[estadoFecha(ev)] + " · " + esc((nodo(ev.lugar) || {}).nombre || ev.lugar) +
-      (ev.estado === "pendiente" ? " · ⏳ pendiente" : "") + (ev.asistencia ? " · ✅ asistencia QR (" + asistentes(ev.id).length + ")" : "") + "</span></div>" +
-      '<div class="manage-actions">' + (sesion.rol === "admin" && ev.estado === "pendiente" ? '<button class="primary" data-aprobar="' + ev.id + '" type="button">Aprobar</button>' : "") +
-      '<button class="primary" data-gest="' + ev.id + '" type="button">Gestionar</button><button class="secondary" data-edit="' + ev.id + '" type="button">Editar</button>' +
-      '<button class="danger" data-delete="' + ev.id + '" type="button">Eliminar</button></div></div>').join("") : '<p class="muted">Todavía no tienes eventos.</p>';
-    box.querySelectorAll("[data-gest]").forEach(b => b.onclick = () => gestionar(b.dataset.gest, "aforo"));
-    box.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => editar(b.dataset.edit));
-    box.querySelectorAll("[data-aprobar]").forEach(b => b.onclick = () => cambiarEstado(b.dataset.aprobar, "aprobado"));
-    box.querySelectorAll("[data-delete]").forEach(b => b.onclick = () => {
-      if (b.dataset.seguro !== "1") { b.dataset.seguro = "1"; b.textContent = "¿Seguro? Toca otra vez"; return; }
-      guardarEventos(eventosGuardados().filter(e => e.id !== b.dataset.delete));
-      $("#form-message").textContent = "Evento eliminado."; refrescarTodo();
-    });
-  }
   function editar(id) {
     const ev = eventosGuardados().find(e => e.id === id); if (!ev) return;
     const f = $("#event-form").elements;
-    f.id.value = ev.id; f.name.value = ev.nombre; f.category.value = ev.categoria || ""; f.date.value = ev.inicio.slice(0, 10); f.time.value = ev.inicio.slice(11, 16);
-    f.place.value = ev.lugar; f.capacity.value = ev.capacidad || ""; f.description.value = ev.descripcion || ""; f.asistencia.checked = !!ev.asistencia;
-    $("#form-title").textContent = "Editar evento"; $("#save-event-btn").textContent = "Guardar cambios"; $("#cancel-edit-btn").classList.remove("hidden");
-    irA("organizer"); $("#event-form").scrollIntoView({ behavior: "smooth", block: "center" });
+    f.id.value = ev.id; f.name.value = ev.nombre; f.category.value = ev.categoria; f.place.value = ev.lugar; f.date.value = ev.inicio.slice(0, 10); f.time.value = ev.inicio.slice(11, 16); f.end.value = ev.fin.slice(11, 16);
+    f.capacity.value = ev.capacidad; f.expected.value = ev.esperados || ""; f.description.value = ev.descripcion || ""; f.registro.value = ev.registro || "libre";
+    $("#form-title").textContent = "Editar evento"; $("#save-event-btn").textContent = "Guardar cambios"; $("#cancel-edit-btn").classList.remove("hidden"); rutaPrevia();
+    irA("organizer"); $("#event-form").scrollIntoView({ behavior: "smooth", block: "start" });
   }
   $("#event-form").onsubmit = e => {
     e.preventDefault(); if (!esGestor()) return;
-    const f = new FormData(e.target), cap = Number(f.get("capacity"));
-    if (!Number.isInteger(cap) || cap < 1) { $("#form-message").textContent = "Ingresa una capacidad válida."; return; }
-    const inicio = f.get("date") + "T" + f.get("time");
-    const finD = new Date(new Date(inicio).getTime() + 2 * 3600e3);
-    const fin = finD.getFullYear() + "-" + pad(finD.getMonth() + 1) + "-" + pad(finD.getDate()) + "T" + pad(finD.getHours()) + ":" + pad(finD.getMinutes());
-    const datos = { nombre: f.get("name").trim(), categoria: f.get("category"), inicio, fin, lugar: f.get("place"), capacidad: cap, descripcion: f.get("description").trim(), asistencia: !!f.get("asistencia") };
+    const f = new FormData(e.target), cap = +f.get("capacity"), esp = +f.get("expected");
+    const inicio = f.get("date") + "T" + f.get("time"), fin = f.get("date") + "T" + f.get("end");
+    if (fin <= inicio) { $("#form-message").textContent = "La hora de fin debe ser posterior al inicio."; return; }
+    const datos = { nombre: f.get("name").trim(), categoria: f.get("category"), lugar: f.get("place"), inicio, fin, capacidad: cap, esperados: esp, descripcion: f.get("description").trim(), registro: f.get("registro") };
     const evs = eventosGuardados(), id = f.get("id");
-    if (id) {
-      const ev = evs.find(x => x.id === id);
-      if (ev) {
-        Object.assign(ev, datos);
-        // Si cambia la duración por la fecha nueva se mantiene 2 h desde el inicio
-        if (datos.asistencia && !ev.secreto) ev.secreto = nuevoSecreto();
-      }
-      $("#form-message").textContent = "Cambios guardados.";
-    } else {
-      evs.push(Object.assign({ id: "ev" + Date.now(), organizador: sesion.nombre, estado: sesion.rol === "admin" ? "aprobado" : "pendiente", aforo_pct: null, secreto: nuevoSecreto() }, datos));
-      $("#form-message").textContent = sesion.rol === "admin" ? "Evento publicado." : "Evento enviado: queda pendiente hasta que un administrador lo apruebe.";
+    let msg;
+    if (id) { Object.assign(evs.find(x => x.id === id), datos); msg = "Cambios guardados."; }
+    else {
+      evs.push(Object.assign({ id: "ev" + Date.now(), organizador: sesion.nombre, estado: sesion.rol === "admin" ? "aprobado" : "pendiente", actuales: 0, secreto: nuevoSecreto() }, datos));
+      msg = sesion.rol === "admin" ? "Evento publicado. Ya aparece en el mapa." : "Solicitud enviada. Se publicará cuando la administración apruebe la reserva.";
     }
-    guardarEventos(evs);
-    const msg = $("#form-message").textContent; resetForm(); $("#form-message").textContent = msg;
-    refrescarTodo();
+    guardarEventos(evs); resetForm(); $("#form-message").textContent = msg; refrescarTodo();
   };
-  function cambiarEstado(id, estado) {
-    let evs = eventosGuardados();
-    evs = estado ? evs.map(e => e.id === id ? Object.assign(e, { estado }) : e) : evs.filter(e => e.id !== id);
-    guardarEventos(evs); toast(estado ? "Evento aprobado: ya es visible para todos." : "Evento rechazado."); refrescarTodo();
+  function renderManageList() {
+    const box = $("#manage-event-list");
+    if (!esGestor()) { box.innerHTML = ""; return; }
+    const mios = eventos().filter(e => sesion.rol === "admin" ? e.organizador === sesion.nombre : e.organizador === sesion.nombre).sort((a, b) => b.inicio.localeCompare(a.inicio));
+    box.innerHTML = mios.map(ev => filaEvento(ev, '<button class="primary" data-gest="' + ev.id + '" type="button">Gestionar</button><button class="secondary" data-edit="' + ev.id + '" type="button">Editar</button>')).join("") || '<p class="muted">Todavía no tienes eventos.</p>';
+    box.querySelectorAll("[data-gest]").forEach(b => b.onclick = () => gestionar(b.dataset.gest, "aforo"));
+    box.querySelectorAll("[data-edit]").forEach(b => b.onclick = () => editar(b.dataset.edit));
   }
+  const filaEvento = (ev, acciones) => '<div class="manage-row"><div class="manage-info"><b>' + esc(ev.nombre) + "</b><span>" + fmtFecha(ev.inicio) + " " + fmtHora(ev.inicio) + "–" + fmtHora(ev.fin) + " · " + esc(ev.lugarInfo.direccion) + " · " + esc(ev.organizador) +
+    " · " + (ev.estado === "pendiente" ? "Pendiente" : ETQ[estadoFecha(ev)]) + " · " + (ev.registro === "qr" ? "Registro QR" : "Sin registro") + '</span></div><div class="manage-actions">' + acciones + "</div></div>";
 
-  // ---------- Modal "Gestionar" (aforo, avisos, asistencia) ----------
+  // ---------- Modal Gestionar ----------
   let timerModal = null;
   function abrirModal(html) { clearInterval(timerModal); timerModal = null; $("#modal-cuerpo").innerHTML = html; $("#modal").classList.remove("hidden"); }
   function cerrarModal() { $("#modal").classList.add("hidden"); clearInterval(timerModal); timerModal = null; }
   $("#modal-cerrar").onclick = cerrarModal;
   $("#modal").onclick = e => { if (e.target.id === "modal") cerrarModal(); };
+  function actualizarEvento(id, cambios) { const evs = eventosGuardados(); Object.assign(evs.find(x => x.id === id), cambios); guardarEventos(evs); }
 
-  function gestionar(id, pestaña) {
+  function gestionar(id, pest) {
     const ev = evento(id); if (!ev || !puedeGestionar(ev)) return;
-    const tabs = '<div class="gest-tabs">' + [["aforo", "Aforo"], ["aviso", "Aviso"], ["asistencia", "Asistencia"]]
-      .map(([k, t]) => '<button class="secondary' + (k === pestaña ? " active" : "") + '" data-gt="' + k + '" type="button">' + t + "</button>").join("") + "</div>";
-    let cuerpo = "";
-    if (pestaña === "aforo") {
-      cuerpo = ev.asistencia
-        ? '<p class="notice">Este evento registra asistencia con QR: el aforo se calcula solo (' + ev.asistentes_n + " / " + ev.capacidad + ").</p>"
-        : '<p class="muted">¿Qué porcentaje del lugar está lleno ahora? Vence a las 2 h si no se actualiza.</p>' +
-          '<div class="codigo-grande"><span id="pct-v">' + (ev.aforo_pct == null ? 0 : ev.aforo_pct) + "</span>%</div>" +
-          '<input type="range" min="0" max="100" step="5" value="' + (ev.aforo_pct || 0) + '" id="pct-r">' +
-          '<button class="primary full" id="pct-ok" type="button">Actualizar aforo</button>';
-    } else if (pestaña === "aviso") {
-      cuerpo = '<p class="muted">Llega a quienes siguen el evento (🔔). Máx. 120 caracteres; un aviso por minuto.</p>' +
-        '<textarea id="msg" maxlength="120" rows="3" placeholder="Ej.: Quedan lugares, ¡te esperamos!"></textarea><div class="plantillas">' +
-        ["Quedan lugares, ¡te esperamos!", "Empezamos en 10 minutos", "Cambio de sala: revisa la ruta"].map(t => '<button class="secondary" data-pl="' + esc(t) + '" type="button">' + esc(t) + "</button>").join("") +
-        '</div><button class="primary full" id="msg-ok" type="button"' + (ev.estado !== "aprobado" ? " disabled" : "") + ">📣 Enviar aviso</button>" +
-        (ev.estado !== "aprobado" ? '<p class="muted">Disponible cuando el evento esté aprobado.</p>' : "");
+    const tabs = '<div class="gest-tabs">' + [["aforo", "Aforo"], ["aviso", "Notificar"], ["asistencia", "Asistencia"]].map(([k, t]) => '<button class="secondary' + (k === pest ? " active" : "") + '" data-gt="' + k + '" type="button">' + t + "</button>").join("") + "</div>";
+    let c = "";
+    if (pest === "aforo") {
+      c = '<div class="aforo-grid"><div><small>Actual</small><b>' + ev.actual + "</b></div><div><small>Esperado</small><b>" + (ev.esperados || 0) + "</b></div><div><small>Capacidad</small><b>" + ev.capacidad + "</b></div></div>" +
+        (ev.registro === "qr" ? '<p class="notice">Con registro QR, el aforo actual suma automáticamente los escaneos (' + asistentes(id).length + "). Puedes añadir personas sin registro abajo.</p>" : "") +
+        '<label class="left">Asistentes actuales' + (ev.registro === "qr" ? " sin registro QR" : "") + '<input id="g-act" type="number" min="0" value="' + (ev.actuales || 0) + '"></label>' +
+        '<label class="left">Asistentes esperados<input id="g-esp" type="number" min="0" value="' + (ev.esperados || 0) + '"></label>' +
+        '<button class="primary full" id="g-ok" type="button">Guardar aforo</button>';
+    } else if (pest === "aviso") {
+      const falta = Math.max(0, (ev.esperados || 0) - ev.actual);
+      c = '<p class="muted">El aviso llega a las personas que activaron "Recibir avisos" en este evento.' + (falta ? " Faltan " + falta + " asistentes para lo esperado." : "") + '</p><textarea id="msg" maxlength="120" rows="3" placeholder="Máximo 120 caracteres"></textarea><div class="plantillas">' +
+        ["Aún quedan lugares, te esperamos.", "Necesitamos más participantes: súmate.", "Empezamos en 10 minutos.", "Cambio de sala: revisa la ruta."].map(t => '<button class="secondary" data-pl="' + esc(t) + '" type="button">' + esc(t) + "</button>").join("") +
+        '</div><button class="primary full" id="msg-ok" type="button"' + (ev.estado !== "aprobado" ? " disabled" : "") + ">Enviar notificación</button>";
     } else {
-      const lista = asistentes(id);
-      cuerpo = '<label class="check-line" style="justify-content:center;display:flex;gap:8px"><input type="checkbox" id="asis-on" ' + (ev.asistencia ? "checked" : "") + "> Registrar asistencia con QR</label>" +
-        (ev.asistencia ? '<button class="primary full" id="asis-qr" type="button"' + (ev.estado !== "aprobado" ? " disabled" : "") + '>📷 Mostrar QR de asistencia</button>' +
-          '<h3 class="left">Asistentes: ' + lista.length + " / " + ev.capacidad + "</h3>" +
-          '<ul class="lista-asis">' + (lista.map((p, i) => "<li><span>" + esc(p.nombre) + (p.codigo ? " <small class='muted'>· " + esc(p.codigo) + "</small>" : "") +
-            "<br><small class='muted'>" + fmtHora(p.t) + " · " + (p.metodo === "qr" ? "QR" : "manual") + '</small></span><button class="danger" data-ret="' + i + '" type="button">Retirar</button></li>').join("") || '<li class="muted">Nadie registrado todavía.</li>') + "</ul>" +
-          '<div class="fila"><input id="asis-nombre" placeholder="Agregar a mano (nombre)"><button class="secondary" id="asis-add" type="button">Agregar</button></div>' +
-          '<button class="secondary full" id="asis-copiar" type="button">📋 Copiar lista (para Excel)</button>' : "");
+      if (ev.registro !== "qr") c = '<p class="notice">Este evento es de entrada libre (sin registro de participantes).</p><button class="secondary full" id="a-on" type="button">Cambiar a registro con QR</button>';
+      else {
+        const l = asistentes(id);
+        c = '<button class="primary full" id="a-qr" type="button"' + (ev.estado !== "aprobado" ? " disabled" : "") + '>Mostrar QR de asistencia</button><h4 class="left">Registrados: ' + l.length + "</h4>" +
+          '<ul class="lista-asis">' + (l.map((p, i) => "<li><span>" + esc(p.nombre) + (p.codigo ? " <small class='muted'>· " + esc(p.codigo) + "</small>" : "") + "<br><small class='muted'>" + fmtHora(p.t) + " · " + (p.metodo === "qr" ? "QR" : "manual") + '</small></span><button class="danger" data-ret="' + i + '" type="button">Retirar</button></li>').join("") || '<li class="muted">Nadie registrado todavía.</li>') + "</ul>" +
+          '<div class="fila"><input id="a-nom" placeholder="Agregar a mano (nombre)"><button class="secondary" id="a-add" type="button">Agregar</button></div><button class="secondary full" id="a-off" type="button">Cambiar a entrada libre</button>';
+      }
     }
-    abrirModal("<h3>" + esc(ev.nombre) + "</h3>" + tabs + cuerpo);
+    abrirModal("<h3>" + esc(ev.nombre) + '</h3><p class="muted">' + esc(ev.lugarInfo.direccion) + "</p>" + tabs + c);
     $$("[data-gt]").forEach(b => b.onclick = () => gestionar(id, b.dataset.gt));
-    if (pestaña === "aforo" && !ev.asistencia) {
-      $("#pct-r").oninput = () => { $("#pct-v").textContent = $("#pct-r").value; };
-      $("#pct-ok").onclick = () => {
-        const pct = +$("#pct-r").value, a = leer("aforos", {}); a[id] = { pct, t: Date.now() }; guardar("aforos", a);
-        refrescarTodo(); toast("Aforo actualizado: " + pct + " %." + (pct < 50 ? " ¿Avisas a los seguidores que quedan lugares?" : ""));
-        if (pct < 50) gestionar(id, "aviso"); else cerrarModal();
-      };
+    if (pest === "aforo") $("#g-ok").onclick = () => { actualizarEvento(id, { actuales: Math.max(0, +$("#g-act").value || 0), esperados: Math.max(0, +$("#g-esp").value || 0) }); refrescarTodo(); toast("Aforo actualizado."); gestionar(id, "aforo"); };
+    if (pest === "aviso") { $$("[data-pl]").forEach(b => b.onclick = () => { $("#msg").value = b.dataset.pl; }); $("#msg-ok").onclick = () => enviarAviso(id, $("#msg").value.trim()); }
+    if (pest === "asistencia") {
+      const on = $("#a-on"), off = $("#a-off");
+      if (on) on.onclick = () => { actualizarEvento(id, { registro: "qr" }); refrescarTodo(); gestionar(id, "asistencia"); };
+      if (off) off.onclick = () => { actualizarEvento(id, { registro: "libre" }); refrescarTodo(); gestionar(id, "asistencia"); };
+      const q = $("#a-qr"); if (q) q.onclick = () => qrAsistencia(id);
+      $$("[data-ret]").forEach(b => b.onclick = () => { if (b.dataset.seguro !== "1") { b.dataset.seguro = "1"; b.textContent = "Confirmar"; return; } const l = asistentes(id); const x = l.splice(+b.dataset.ret, 1)[0]; guardarAsistentes(id, l); toast("Se retiró a " + x.nombre + "."); refrescarTodo(); gestionar(id, "asistencia"); });
+      const add = $("#a-add"); if (add) add.onclick = () => { const n = $("#a-nom").value.trim(); if (!n) return; toast(registrarAsistencia(id, { nombre: n, codigo: "" }, "manual").msg); refrescarTodo(); gestionar(id, "asistencia"); };
     }
-    if (pestaña === "aviso") {
-      $$("[data-pl]").forEach(b => b.onclick = () => { $("#msg").value = b.dataset.pl; });
-      $("#msg-ok").onclick = () => enviarAviso(id, $("#msg").value.trim());
-    }
-    if (pestaña === "asistencia") {
-      $("#asis-on").onchange = () => {
-        const evs = eventosGuardados(), e2 = evs.find(x => x.id === id);
-        e2.asistencia = $("#asis-on").checked; if (!e2.secreto) e2.secreto = nuevoSecreto();
-        guardarEventos(evs); refrescarTodo(); gestionar(id, "asistencia");
-      };
-      const q = $("#asis-qr"); if (q) q.onclick = () => qrAsistencia(id);
-      $$("[data-ret]").forEach(b => b.onclick = () => {
-        if (b.dataset.seguro !== "1") { b.dataset.seguro = "1"; b.textContent = "¿Seguro?"; return; }
-        const l = asistentes(id), quitado = l.splice(+b.dataset.ret, 1)[0]; guardarAsistentes(id, l);
-        toast("Se retiró a " + quitado.nombre + "."); refrescarTodo(); gestionar(id, "asistencia");
-      });
-      const add = $("#asis-add"); if (add) add.onclick = () => {
-        const nombre = $("#asis-nombre").value.trim(); if (!nombre) { toast("Escribe el nombre."); return; }
-        toast(registrarAsistencia(id, { nombre, codigo: "" }, "manual").msg); refrescarTodo(); gestionar(id, "asistencia");
-      };
-      const cp = $("#asis-copiar"); if (cp) cp.onclick = () => {
-        const txt = ["Nombre\tCódigo\tHora\tMétodo"].concat(asistentes(id).map(p => [p.nombre, p.codigo || "", new Date(p.t).toLocaleString("es-BO"), p.metodo].join("\t"))).join("\n");
-        (navigator.clipboard ? navigator.clipboard.writeText(txt) : Promise.reject()).then(() => toast("Lista copiada: pégala en Excel o Sheets."), () => descargar(txt, ev.nombre));
-      };
-    }
-  }
-  function descargar(txt, nombre) {
-    try {
-      const a = document.createElement("a");
-      a.href = URL.createObjectURL(new Blob(["﻿" + txt.replace(/\t/g, ",")], { type: "text/csv;charset=utf-8" }));
-      a.download = "asistencia_" + nombre.replace(/[^\w]+/g, "_") + ".csv"; document.body.appendChild(a); a.click(); a.remove();
-    } catch (e) { toast("No se pudo copiar ni descargar la lista."); }
   }
 
-  // =====================================================================
-  // ASISTENCIA CON QR
-  // =====================================================================
-  const nuevoSecreto = () => Math.random().toString(36).slice(2) + Date.now().toString(36);
-  function codigoQR(secreto, ventana) {
-    let h = 2166136261; const s = secreto + ":" + ventana;
-    for (let i = 0; i < s.length; i++) { h ^= s.charCodeAt(i); h = Math.imul(h, 16777619); }
-    return String((h >>> 0) % 10000).padStart(4, "0");
-  }
+  // ---------- Asistencia con QR ----------
+  function nuevoSecreto() { return Math.random().toString(36).slice(2) + Date.now().toString(36); }
   const ventana = () => Math.floor(Date.now() / VENTANA_QR_MS);
-  function codigoValido(id, cod) {
-    const ev = eventosGuardados().find(e => e.id === id);
-    if (!ev || !ev.asistencia || !ev.secreto) return false;
-    const v = ventana(); return [v, v - 1, v - 2].some(w => codigoQR(ev.secreto, w) === String(cod).trim());
-  }
-  function qrSVG(texto) {
-    const q = qrcode(0, "M"); q.addData(texto); q.make();
-    return q.createSvgTag({ cellSize: 6, margin: 4, scalable: true }).replace("<svg ", '<svg class="qr" ');
-  }
+  const codigoQR = (sec, v) => String(hash(sec + ":" + v) % 10000).padStart(4, "0");
+  function codigoValido(id, cod) { const ev = eventosGuardados().find(e => e.id === id); if (!ev || ev.registro !== "qr") return false; const v = ventana(); return [v, v - 1, v - 2].some(w => codigoQR(ev.secreto, w) === String(cod).trim()); }
+  function qrSVG(t) { const q = qrcode(0, "M"); q.addData(t); q.make(); return q.createSvgTag({ cellSize: 6, margin: 4, scalable: true }).replace("<svg ", '<svg class="qr" '); }
   function qrAsistencia(id) {
     const ev = eventosGuardados().find(e => e.id === id);
     const pintar = () => {
-      const v = ventana(), cod = codigoQR(ev.secreto, v);
-      const url = urlBase() + "?asistir=" + encodeURIComponent(id) + "&c=" + cod;
-      const quedan = Math.ceil(((v + 1) * VENTANA_QR_MS - Date.now()) / 1000);
-      $("#modal-cuerpo").innerHTML = "<h3>Asistencia · " + esc(ev.nombre) + "</h3>" + qrSVG(url) + '<div class="codigo-grande">' + cod + "</div>" +
-        '<p class="muted">Escanea con la cámara, o en la app: menú ☰ → Registrar asistencia y escribe el código. Cambia en <b>' + quedan + " s</b>.</p>" +
-        "<p><b>" + asistentes(id).length + "</b> asistentes registrados</p>" + '<button class="secondary" id="volver-gest" type="button">← Volver</button>';
-      $("#volver-gest").onclick = () => gestionar(id, "asistencia");
+      const v = ventana(), cod = codigoQR(ev.secreto, v), url = urlBase() + "?asistir=" + encodeURIComponent(id) + "&c=" + cod, q = Math.ceil(((v + 1) * VENTANA_QR_MS - Date.now()) / 1000);
+      $("#modal-cuerpo").innerHTML = "<h3>Asistencia · " + esc(ev.nombre) + "</h3>" + qrSVG(url) + '<div class="codigo-grande">' + cod + '</div><p class="muted">Escanea con la cámara o ingresa el código en Menú → Registrar asistencia. Cambia en ' + q + " s.</p><p><b>" + asistentes(id).length + '</b> registrados</p><button class="secondary" id="volver" type="button">Volver</button>';
+      $("#volver").onclick = () => gestionar(id, "asistencia");
     };
     abrirModal(""); pintar(); timerModal = setInterval(pintar, 1000);
   }
-  function qrEvento(id) {
-    const ev = evento(id), url = urlBase() + "?evento=" + encodeURIComponent(id);
-    abrirModal("<h3>" + esc(ev.nombre) + "</h3>" + qrSVG(url) + '<p class="muted">QR para el afiche: abre la ruta hasta ' + esc(nodo(ev.lugar).nombre) + "</p><input readonly value=\"" + esc(url) + '">');
+  function registrarAsistencia(id, p, metodo) {
+    const l = asistentes(id), ev = evento(id), clave = x => (x.codigo || x.nombre).toLowerCase();
+    if (l.some(x => clave(x) === clave(p))) return { ok: false, msg: p.nombre + " ya estaba registrado." };
+    if (ev && l.length + (ev.actuales || 0) >= ev.capacidad) return { ok: false, msg: "El evento alcanzó su capacidad." };
+    l.push({ nombre: p.nombre, codigo: p.codigo || "", t: Date.now(), metodo }); guardarAsistentes(id, l);
+    return { ok: true, msg: "Asistencia registrada: " + p.nombre };
   }
-  function registrarAsistencia(id, persona, metodo) {
-    const l = asistentes(id), ev = evento(id);
-    if (l.some(x => clavePersona(x) === clavePersona(persona))) return { ok: false, msg: persona.nombre + " ya tenía la asistencia registrada." };
-    if (ev && ev.capacidad && l.length >= ev.capacidad) return { ok: false, msg: "El evento ya alcanzó su capacidad (" + ev.capacidad + ")." };
-    l.push({ nombre: persona.nombre, codigo: persona.codigo || "", t: Date.now(), metodo }); guardarAsistentes(id, l);
-    return { ok: true, msg: "✅ Asistencia registrada: " + persona.nombre + " · " + (ev ? ev.nombre : "") };
+  function conPerfil(cont) {
+    const p = leer("perfil", null); if (p) return cont(p);
+    abrirModal('<h3>Tus datos</h3><p class="muted">Necesarios para registrar tu asistencia.</p><input id="pf-n" placeholder="Nombre completo" maxlength="60"><input id="pf-c" placeholder="Carnet o código de estudiante" maxlength="20"><button class="primary full" id="pf-ok" type="button">Continuar</button>');
+    $("#pf-ok").onclick = () => { const n = $("#pf-n").value.trim(); if (!n) return toast("Escribe tu nombre."); const per = { nombre: n, codigo: $("#pf-c").value.trim() }; guardar("perfil", per); cerrarModal(); cont(per); };
   }
-  function pedirPerfil(continuar) {
-    const p = perfil() || {};
-    abrirModal("<h3>Tus datos de estudiante</h3><p class='muted'>Se usan para tu horario y para registrar tu asistencia. En la versión final se toman de tu cuenta institucional.</p>" +
-      '<input id="pf-nombre" placeholder="Nombre completo" maxlength="60" value="' + esc(p.nombre || "") + '"><input id="pf-codigo" placeholder="Código de estudiante o CI" maxlength="20" value="' + esc(p.codigo || "") + '">' +
-      '<button class="primary full" id="pf-ok" type="button">Continuar</button>');
-    $("#pf-ok").onclick = () => {
-      const nombre = $("#pf-nombre").value.trim(), codigo = $("#pf-codigo").value.trim();
-      if (!nombre) { toast("Escribe tu nombre."); return; }
-      guardar("perfil", { nombre, codigo });
-      if (sesion.rol === "visitante") cambiarSesion({ rol: "estudiante" }); else refrescarTodo();
-      cerrarModal(); continuar({ nombre, codigo });
-    };
-  }
-  const conPerfil = cont => (sesion.rol !== "visitante" && perfil()) ? cont(perfil()) : pedirPerfil(cont);
   function marcarConCodigo(id, cod) {
-    const ev = evento(id);
-    if (!ev) { toast("Evento no encontrado."); return; }
-    if (!codigoValido(id, cod)) { abrirModal('<div class="aviso error"><b>Código vencido o incorrecto.</b><br>Vuelve a escanear el QR del organizador (cambia cada 30 s).</div>'); return; }
-    conPerfil(p => {
-      const r = registrarAsistencia(id, p, "qr");
-      abrirModal('<div class="aviso ' + (r.ok ? "ok" : "info") + '"><b>' + esc(r.msg) + '</b></div><p class="muted">' + fmtFecha(ev.inicio) + " · " + esc(nodo(ev.lugar).nombre) + "</p>" +
-        '<button class="primary full" id="ir-ev" type="button">Cómo llegar</button>');
-      $("#ir-ev").onclick = () => { cerrarModal(); irRuta(ev.lugar); };
-      refrescarTodo();
-    });
+    const ev = evento(id); if (!ev) return toast("Evento no encontrado.");
+    if (!codigoValido(id, cod)) return abrirModal('<div class="aviso error">Código vencido o incorrecto. Vuelve a escanear el QR del organizador (cambia cada 30 s).</div>');
+    conPerfil(p => { const r = registrarAsistencia(id, p, "qr"); abrirModal('<div class="aviso ' + (r.ok ? "ok" : "info") + '">' + esc(r.msg) + "</div><p class='muted'>" + esc(ev.nombre) + " · " + esc(ev.lugarInfo.direccion) + '</p><button class="primary full" id="ir-ev" type="button">Cómo llegar</button>'); $("#ir-ev").onclick = () => { cerrarModal(); irEvento(id); }; refrescarTodo(); });
   }
-  function pedirCodigo(idSel) {
-    const abiertos = eventos().filter(e => e.asistencia && e.estado === "aprobado" && estadoFecha(e) !== "past");
-    if (!abiertos.length) { abrirModal('<div class="aviso info">Ningún evento está registrando asistencia en este momento.</div>'); return; }
-    abrirModal("<h3>Registrar asistencia</h3><p class='muted'>Escanea el QR del organizador con la cámara, o elige el evento y escribe el código de 4 dígitos.</p>" +
-      '<select id="cod-ev">' + abiertos.map(e => '<option value="' + e.id + '"' + (e.id === idSel ? " selected" : "") + ">" + esc(e.nombre) + "</option>").join("") + "</select>" +
-      '<input id="cod-asis" inputmode="numeric" maxlength="4" placeholder="0000" class="codigo-input"><button class="primary full" id="cod-ok" type="button">Registrar</button>');
-    $("#cod-ok").onclick = () => marcarConCodigo($("#cod-ev").value, $("#cod-asis").value);
+  function pedirCodigo(sel) {
+    const ab = eventos().filter(e => e.registro === "qr" && e.estado === "aprobado" && estadoFecha(e) !== "past");
+    if (!ab.length) return abrirModal('<div class="aviso info">Ningún evento está registrando asistencia ahora.</div>');
+    abrirModal('<h3>Registrar asistencia</h3><select id="c-ev">' + ab.map(e => '<option value="' + e.id + '"' + (e.id === sel ? " selected" : "") + ">" + esc(e.nombre) + '</option>').join("") + '</select><input id="c-cod" inputmode="numeric" maxlength="4" placeholder="Código de 4 dígitos" class="codigo-input"><button class="primary full" id="c-ok" type="button">Registrar</button>');
+    $("#c-ok").onclick = () => marcarConCodigo($("#c-ev").value, $("#c-cod").value);
   }
   $("#menu-asistencia").onclick = () => { cerrarMenu(); pedirCodigo(); };
 
-  // =====================================================================
-  // AVISOS
-  // =====================================================================
-  const avisosMios = () => { const s = leer("seguidos", []); return tieneCuenta() ? leer("avisos", []).filter(a => s.includes(a.evento)) : []; };
+  // ---------- Avisos ----------
+  const avisosMios = () => { const s = leer("seguidos", []); return leer("avisos", []).filter(a => s.includes(a.evento)); };
   function enviarAviso(id, texto) {
-    if (!texto) { toast("Escribe el aviso o elige una plantilla."); return; }
-    const ult = leer("ultimo_aviso", {});
-    if (ult[id] && Date.now() - ult[id] < ESPERA_AVISO_MS) { toast("Anti-spam: espera " + Math.ceil((ESPERA_AVISO_MS - (Date.now() - ult[id])) / 1000) + " s para volver a avisar."); return; }
-    ult[id] = Date.now(); guardar("ultimo_aviso", ult);
-    const ev = evento(id), av = leer("avisos", []);
-    av.unshift({ t: Date.now(), evento: id, titulo: ev.nombre, texto }); guardar("avisos", av.slice(0, 50));
-    if (leer("seguidos", []).includes(id)) notificar(ev.nombre, texto, ev.lugar);
-    toast("📣 Aviso enviado a los seguidores de " + ev.nombre + "."); cerrarModal(); pintarBadge(); pintarAvisos();
+    if (!texto) return toast("Escribe el aviso o elige una plantilla.");
+    const u = leer("ultimo_aviso", {}); if (u[id] && Date.now() - u[id] < ESPERA_AVISO_MS) return toast("Espera un minuto antes de volver a notificar este evento.");
+    u[id] = Date.now(); guardar("ultimo_aviso", u);
+    const ev = evento(id), av = leer("avisos", []); av.unshift({ t: Date.now(), evento: id, titulo: ev.nombre, texto }); guardar("avisos", av.slice(0, 50));
+    if (leer("seguidos", []).includes(id) && "Notification" in window && Notification.permission === "granted") {
+      const o = { body: texto, icon: "icono-192.png", data: { url: urlBase() + "?evento=" + id } };
+      if (navigator.serviceWorker && navigator.serviceWorker.controller) navigator.serviceWorker.ready.then(r => r.showNotification(ev.nombre, o)); else { try { new Notification(ev.nombre, o); } catch (e) {} }
+    }
+    toast("Notificación enviada a los seguidores de " + ev.nombre + "."); cerrarModal(); pintarBadge();
   }
-  function notificar(titulo, cuerpo, lugar) {
-    if (!("Notification" in window) || Notification.permission !== "granted") return;
-    const opts = { body: cuerpo, icon: "icono-192.png", data: { url: urlRuta(null, lugar) } };
-    if (navigator.serviceWorker && navigator.serviceWorker.controller) navigator.serviceWorker.ready.then(r => r.showNotification(titulo, opts));
-    else { try { new Notification(titulo, opts); } catch (e) {} }
-  }
-  function pintarAvisos() {
-    const l = avisosMios();
-    $("#lista-avisos").innerHTML = !tieneCuenta()
-      ? '<p class="notice">Abre el menú ☰ → <b>Soy estudiante</b> para seguir eventos y recibir avisos.</p>'
-      : l.map(a => { const ev = evento(a.evento); return '<div class="manage-row"><div class="manage-info"><b>📣 ' + esc(a.titulo) + "</b><span>" + esc(a.texto) + " · " + fmtHora(a.t) + "</span></div>" +
-          (ev ? '<div class="manage-actions"><button class="primary" data-ira="' + ev.lugar + '" type="button">Cómo llegar</button></div>' : "") + "</div>"; }).join("") ||
-        '<p class="muted">Aún no hay avisos. Sigue un evento (🔔 Seguir) para recibir los avisos de sus organizadores.</p>';
-    $$("[data-ira]").forEach(b => b.onclick = () => irRuta(b.dataset.ira));
-    $("#btn-permiso").classList.toggle("hidden", !tieneCuenta() || !("Notification" in window) || Notification.permission !== "default");
-  }
-  $("#btn-permiso").onclick = () => Notification.requestPermission().then(pintarAvisos).catch(() => {});
-  function pintarBadge() {
-    const n = avisosMios().length - leer("avisos_leidos", 0);
-    $("#badge-avisos").textContent = n > 0 ? n : "";
-    $("#badge-menu").classList.toggle("hidden", !(n > 0));
-  }
-
-  // =====================================================================
-  // MI HORARIO
-  // =====================================================================
-  const DIAS = ["Dom", "Lun", "Mar", "Mié", "Jue", "Vie", "Sáb"], DIAS_RR = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
-  function pintarHorario() {
-    const sin = sesion.rol === "visitante";
-    $("#horario-sin-cuenta").classList.toggle("hidden", !sin);
-    $("#horario-contenido").classList.toggle("hidden", sin);
-    if (sin) return;
-    const clases = leer("clases", []), ahora = new Date();
-    let prox = null;
-    clases.filter(c => c.nodo).forEach(c => { const d = Horario.proximaOcurrencia(c, ahora); if (d && (!prox || d < prox.fecha)) prox = { c, fecha: d }; });
-    if (prox) {
-      const m = modoPreferido(), o = origen(), r = conTramoGPS(Ruteo.ruta(D, o.id, prox.c.nodo, m, opcionesRuta()), o), seg = r.ok ? r.segundos : 0;
-      const salir = Math.round((prox.fecha - ahora) / 1000 - seg - MARGEN_CLASE_S);
-      const cuando = prox.fecha.toDateString() === ahora.toDateString() ? "Hoy" : DIAS[prox.fecha.getDay()];
-      const txt = salir <= 0 ? "<b class='urg'>¡Sal ya!</b>" : salir < 3 * 3600 ? "Sal en <b>" + fmtMin(salir) + "</b>" : "Sal a las <b>" + fmtHora(prox.fecha.getTime() - (seg + MARGEN_CLASE_S) * 1000) + "</b>";
-      $("#proxima-clase").innerHTML = '<div class="prox"><p class="eyebrow">PRÓXIMA CLASE</p><b style="font:800 20px Manrope">' + esc(prox.c.materia) + "</b><span>" + cuando + " " + prox.c.inicio + " · " + esc(nodo(prox.c.nodo).nombre) + "</span>" +
-        "<span>" + txt + (r.ok ? " · " + r.metros + " m desde " + esc(nombreOrigen()) + (m === "accesible" ? " (sin gradas)" : "") : "") + "</span>" +
-        '<button class="primary" data-clase="' + prox.c.nodo + '" type="button">Cómo llegar</button></div>';
-    } else $("#proxima-clase").innerHTML = '<p class="notice">Importa tu horario o agrega tus clases para ver a qué hora salir.</p>';
-
-    $("#lista-clases").innerHTML = clases.map((c, i) => {
-      const n = c.nodo && nodo(c.nodo), d = Horario.proximaOcurrencia(c, ahora) || new Date();
-      const [h1, m1] = c.inicio.split(":").map(Number), [h2, m2] = c.fin.split(":").map(Number);
-      const ini = new Date(d); ini.setHours(h1, m1); const fin = new Date(d); fin.setHours(h2, m2);
-      return '<div class="manage-row"><div class="manage-info"><b>' + esc(c.materia) + "</b><span>" + c.dias.map(x => DIAS[x]).join(", ") + " · " + c.inicio + "–" + c.fin + " · " +
-        (n ? esc(n.nombre) : '<span class="tag-acc">Aula no reconocida: ' + esc(c.ubicacion || "sin ubicación") + "</span>") + "</span>" +
-        (n ? "" : '<select data-asig="' + i + '"><option value="">Asignar aula…</option>' + ordenNodos.filter(x => x.tipo !== "bano").map(x => '<option value="' + x.id + '">' + esc(x.nombre) + "</option>").join("") + "</select>") +
-        '</div><div class="manage-actions">' + (n ? '<button class="primary" data-clase="' + n.id + '" type="button">Cómo llegar</button><a class="secondary" target="_blank" rel="noopener" href="' +
-        linkCalendar(c.materia, ini, fin, n.id, "RRULE:FREQ=WEEKLY;BYDAY=" + c.dias.map(x => DIAS_RR[x]).join(",")) + '">+ Calendar</a>' : "") +
-        '<button class="danger" data-borrar="' + i + '" type="button">Quitar</button></div></div>';
-    }).join("") || '<p class="muted">Sin clases cargadas.</p>';
-    $$("[data-clase]").forEach(b => b.onclick = () => irRuta(b.dataset.clase));
-    $$("[data-borrar]").forEach(b => b.onclick = () => { const cl = leer("clases", []); cl.splice(+b.dataset.borrar, 1); guardar("clases", cl); pintarHorario(); });
-    $$("[data-asig]").forEach(s => s.onchange = () => { const cl = leer("clases", []); cl[+s.dataset.asig].nodo = s.value || null; guardar("clases", cl); pintarHorario(); });
-  }
-  $("#archivo-ics").onchange = e => {
-    const f = e.target.files[0]; if (!f) return;
-    f.text().then(txt => {
-      const nuevas = Horario.leerICS(txt).map(c => Object.assign(c, { nodo: (Horario.reconocerAula(D, c.ubicacion) || {}).id || null }));
-      if (!nuevas.length) { toast("No se encontraron clases en el archivo."); return; }
-      guardar("clases", leer("clases", []).concat(nuevas));
-      toast(nuevas.length + " clases importadas · " + nuevas.filter(c => c.nodo).length + " con aula reconocida.");
-      e.target.value = ""; pintarHorario();
-    });
-  };
-  $("#btn-agregar-clase").onclick = () => {
-    const materia = $("#cl-materia").value.trim(), dias = $$(".cl-dia:checked").map(x => +x.value), inicio = $("#cl-inicio").value, fin = $("#cl-fin").value;
-    if (!materia || !dias.length || !inicio || !fin) { toast("Completa materia, días y horario."); return; }
-    const n = nodo($("#cl-aula").value), cl = leer("clases", []);
-    cl.push({ materia, dias, inicio, fin, ubicacion: n.nombre, nodo: n.id }); guardar("clases", cl);
-    $("#cl-materia").value = ""; $$(".cl-dia").forEach(x => { x.checked = false; }); pintarHorario();
-  };
-  $("#btn-borrar-horario").onclick = e => {
-    const b = e.currentTarget;
-    if (b.dataset.seguro !== "1") { b.dataset.seguro = "1"; b.textContent = "¿Seguro? Toca otra vez"; setTimeout(() => { b.dataset.seguro = ""; b.textContent = "Quitar todo el horario"; }, 4000); return; }
-    b.dataset.seguro = ""; b.textContent = "Quitar todo el horario"; guardar("clases", []); pintarHorario();
+  function pintarBadge() { const n = avisosMios().length - leer("avisos_leidos", 0); $("#badge-avisos").textContent = n > 0 ? n : ""; }
+  $("#btn-avisos").onclick = () => {
+    const l = avisosMios(); guardar("avisos_leidos", l.length); pintarBadge();
+    abrirModal("<h3>Avisos</h3>" + (l.length ? '<ul class="lista-asis">' + l.map(a => "<li><span><b>" + esc(a.titulo) + "</b><br>" + esc(a.texto) + "<br><small class='muted'>" + fmtHora(a.t) + '</small></span><button class="primary" data-av="' + a.evento + '" type="button">Ir</button></li>').join("") + "</ul>"
+      : '<p class="muted">No tienes avisos. Activa "Recibir avisos" en un evento para recibir las notificaciones de sus organizadores.</p>') +
+      ("Notification" in window && Notification.permission === "default" ? '<button class="secondary full" id="perm" type="button">Activar notificaciones del dispositivo</button>' : ""));
+    $$("[data-av]").forEach(b => b.onclick = () => { cerrarModal(); irEvento(b.dataset.av); });
+    const p = $("#perm"); if (p) p.onclick = () => Notification.requestPermission().then(() => cerrarModal()).catch(() => {});
   };
 
   // =====================================================================
   // ADMINISTRACIÓN
   // =====================================================================
+  $$("[data-at]").forEach(b => b.onclick = () => { $$("[data-at]").forEach(x => x.classList.toggle("active", x === b)); ["reservas", "eventos", "mantenimiento"].forEach(k => $("#at-" + k).classList.toggle("hidden", k !== b.dataset.at)); });
+  function conflictos(ev) {
+    const res = [], ini = new Date(ev.inicio), fin = new Date(ev.fin);
+    eventos().forEach(o => { if (o.id !== ev.id && o.estado === "aprobado" && o.lugar === ev.lugar && new Date(o.inicio) < fin && new Date(o.fin) > ini) res.push("Se cruza con " + o.nombre); });
+    const a = aula(ev.lugar);
+    if (a) horarioAula(a, ini.getDay()).filter(x => x.tipo === "clase").forEach(x => { if (aMin(x.i) < aMin(ev.fin.slice(11, 16)) && aMin(x.f) > aMin(ev.inicio.slice(11, 16))) res.push("Clase de " + x.titulo + " (" + x.i + "–" + x.f + ")"); });
+    return res;
+  }
   function pintarAdmin() {
     if (sesion.rol !== "admin") return;
-    const pend = eventosGuardados().filter(e => e.estado === "pendiente");
-    $("#admin-pendientes").innerHTML = pend.length ? pend.map(e => '<div class="manage-row"><div class="manage-info"><b>' + esc(e.nombre) + "</b><span>" + fmtFecha(e.inicio) + " " + fmtHora(e.inicio) + " · " +
-      esc(nodo(e.lugar).nombre) + " · " + esc(e.organizador) + '</span></div><div class="manage-actions"><button class="primary" data-ap="' + e.id + '" type="button">Aprobar</button><button class="danger" data-re="' + e.id + '" type="button">Rechazar</button></div></div>').join("")
-      : '<p class="muted">No hay eventos pendientes.</p>';
-    $$("[data-ap]").forEach(b => b.onclick = () => cambiarEstado(b.dataset.ap, "aprobado"));
-    $$("[data-re]").forEach(b => b.onclick = () => cambiarEstado(b.dataset.re, null));
-    const grupos = {}; D.aristas.forEach(ar => { grupos[grupoArista(ar)] = grupos[grupoArista(ar)] || ar.tipo; });
-    const orden = { ascensor: 0, rampa: 1, camino: 2, escalera: 3 }, cerr = new Set(leer("cerrados", []));
-    $("#admin-caminos").innerHTML = Object.keys(grupos).sort((a, b) => orden[grupos[a]] - orden[grupos[b]] || a.localeCompare(b)).map(g =>
-      '<label class="' + (cerr.has(g) ? "off" : "") + '"><input type="checkbox" data-cerrar="' + esc(g) + '" ' + (cerr.has(g) ? "checked" : "") + "> ⛔ " +
-      { ascensor: "🛗", rampa: "♿", camino: "🚶", escalera: "🪜" }[grupos[g]] + " " + esc(g) + "</label>").join("");
-    $$("[data-cerrar]").forEach(c => c.onchange = () => {
-      const s = new Set(leer("cerrados", [])); c.checked ? s.add(c.dataset.cerrar) : s.delete(c.dataset.cerrar); guardar("cerrados", [...s]);
-      dibujarCaminos(); refrescarTodo(); toast(c.checked ? "Marcado fuera de servicio: las rutas ya lo evitan." : "Habilitado nuevamente.");
-    });
+    const evs = eventos(), pend = evs.filter(e => e.estado === "pendiente");
+    $("#admin-pendientes").innerHTML = pend.map(e => { const c = conflictos(e); return filaEvento(e, '<button class="primary" data-ap="' + e.id + '" type="button">Aprobar</button><button class="danger" data-re="' + e.id + '" type="button">Rechazar</button>').replace("</span></div>", "</span>" + (c.length ? '<span class="tag-acc">Conflicto: ' + esc(c.join("; ")) + "</span>" : '<span class="tag-ok">Sin conflictos de horario</span>') + "</div>"); }).join("") || '<p class="muted">No hay solicitudes pendientes.</p>';
+    const fut = evs.filter(e => e.estado === "aprobado" && estadoFecha(e) !== "past").sort((a, b) => a.inicio.localeCompare(b.inicio));
+    $("#admin-futuros").innerHTML = fut.map(e => filaEvento(e, '<button class="danger" data-del="' + e.id + '" type="button">Cancelar reserva</button>')).join("") || '<p class="muted">Sin reservas futuras.</p>';
+    $("#admin-todos").innerHTML = evs.sort((a, b) => b.inicio.localeCompare(a.inicio)).map(e => filaEvento(e, '<button class="secondary" data-edit2="' + e.id + '" type="button">Editar</button><button class="danger" data-del="' + e.id + '" type="button">Eliminar</button>')).join("");
+    $$("[data-ap]").forEach(b => b.onclick = () => { actualizarEvento(b.dataset.ap, { estado: "aprobado" }); toast("Reserva aprobada: el evento ya es público."); refrescarTodo(); });
+    $$("[data-re]").forEach(b => b.onclick = () => { guardarEventos(eventosGuardados().filter(e => e.id !== b.dataset.re)); toast("Solicitud rechazada."); refrescarTodo(); });
+    $$("[data-del]").forEach(b => b.onclick = () => { if (b.dataset.seguro !== "1") { b.dataset.seguro = "1"; b.textContent = "Confirmar"; return; } guardarEventos(eventosGuardados().filter(e => e.id !== b.dataset.del)); toast("Evento eliminado."); refrescarTodo(); });
+    $$("[data-edit2]").forEach(b => b.onclick = () => editar(b.dataset.edit2));
+    const grupos = {}; D.aristas.forEach(ar => { if (ar.tipo !== "camino" || ar.nombre) grupos[grupoArista(ar)] = grupos[grupoArista(ar)] || ar.tipo; });
+    const orden = { ascensor: 0, rampa: 1, escalera: 2, camino: 3 }, cerr = new Set(leer("cerrados", []));
+    $("#admin-caminos").innerHTML = Object.keys(grupos).sort((a, b) => orden[grupos[a]] - orden[grupos[b]] || a.localeCompare(b)).map(g => '<label class="' + (cerr.has(g) ? "off" : "") + '"><input type="checkbox" data-cerrar="' + esc(g) + '" ' + (cerr.has(g) ? "checked" : "") + "> " + esc(g) + "</label>").join("");
+    $$("[data-cerrar]").forEach(c => c.onchange = () => { const s = new Set(leer("cerrados", [])); c.checked ? s.add(c.dataset.cerrar) : s.delete(c.dataset.cerrar); guardar("cerrados", [...s]); dibujarCaminos(); refrescarTodo(); toast(c.checked ? "Marcado fuera de servicio." : "Habilitado nuevamente."); });
+    $("#admin-estado").innerHTML = [["Puntos del campus", D.nodos.length], ["Caminos", D.aristas.length], ["Aulas", D.aulas.length], ["Eventos", evs.length], ["Pendientes", pend.length], ["Fuera de servicio", cerr.size]].map(([t, v]) => "<div><small>" + t + "</small><b>" + v + "</b></div>").join("");
   }
+  $("#btn-copiar-datos").onclick = () => { const t = JSON.stringify(eventosGuardados(), null, 2); (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(() => toast("Respaldo copiado al portapapeles."), () => toast("No se pudo copiar.")); };
+  $("#btn-reset").onclick = e => { const b = e.currentTarget; if (b.dataset.seguro !== "1") { b.dataset.seguro = "1"; b.textContent = "Confirmar restablecer"; return; } Object.keys(localStorage).filter(k => k.startsWith(P)).forEach(k => localStorage.removeItem(k)); sesion = { rol: "visitante" }; b.dataset.seguro = ""; b.textContent = "Restablecer datos de demostración"; refrescarTodo(); irA("events"); toast("Datos restablecidos."); };
 
   // =====================================================================
-  // ACERCA DE, INSTALACIÓN, TOAST
+  // OTROS
   // =====================================================================
-  $("#menu-acerca").onclick = () => {
-    cerrarMenu();
-    abrirModal('<h3>UCB Events</h3><p class="muted left">Eventos de la UCB y rutas dentro del campus, con rutas sin gradas, baños, horario de clases, avisos de organizadores y asistencia con QR. Prototipo para TECH MECH 2026 (Reto FDI).</p>' +
-      '<p class="muted left">Prototipo sin servidor: los datos se guardan en este navegador. Mapa © colaboradores de OpenStreetMap. Ubicaciones provisionales por verificar en el campus.</p>' +
-      '<button class="danger" id="reset-demo" type="button">Restablecer datos de demostración</button>');
-    $("#reset-demo").onclick = e => {
-      const b = e.currentTarget; if (b.dataset.seguro !== "1") { b.dataset.seguro = "1"; b.textContent = "¿Seguro? Toca otra vez"; return; }
-      Object.keys(localStorage).filter(k => k.startsWith("ucbev_")).forEach(k => localStorage.removeItem(k));
-      sesion = { rol: "visitante" }; cerrarModal(); refrescarTodo(); toast("Datos de demostración restablecidos.");
-    };
-  };
+  $("#menu-acerca").onclick = () => { cerrarMenu(); abrirModal('<h3>UCB Events</h3><p class="left">Plataforma de eventos y orientación en el campus de la UCB La Paz. Prototipo para el Reto FDI de TECH MECH 2026.</p><p class="left muted">Sin servidor: los datos se guardan en este navegador. Caminos medidos con Footpath sobre OpenStreetMap. Horarios de aulas de ejemplo.</p>'); };
   $("#chk-accesible").checked = leer("siempre_accesible", false);
-  $("#chk-accesible").onchange = () => { guardar("siempre_accesible", $("#chk-accesible").checked); setModo(modoPreferido()); pintarHorario(); toast($("#chk-accesible").checked ? "♿ Las rutas serán sin gradas por defecto." : "Rutas más cortas por defecto."); };
-
-  let promptInstalar = null;
-  window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); promptInstalar = e; $("#btn-instalar").classList.remove("hidden"); });
-  $("#btn-instalar").onclick = () => { if (promptInstalar) { promptInstalar.prompt(); promptInstalar = null; $("#btn-instalar").classList.add("hidden"); } };
+  $("#chk-accesible").onchange = () => { guardar("siempre_accesible", $("#chk-accesible").checked); setModo(modoPreferido()); render(); toast($("#chk-accesible").checked ? "Las rutas usarán rampas por defecto." : "Las rutas serán las más cortas por defecto."); };
+  let pInst = null;
+  window.addEventListener("beforeinstallprompt", e => { e.preventDefault(); pInst = e; $("#btn-instalar").classList.remove("hidden"); });
+  $("#btn-instalar").onclick = () => { if (pInst) { pInst.prompt(); pInst = null; $("#btn-instalar").classList.add("hidden"); } };
   if ("serviceWorker" in navigator && location.protocol.startsWith("http")) navigator.serviceWorker.register("sw.js").catch(() => {});
+  let tT; function toast(m) { const t = $("#toast"); t.textContent = m; t.classList.add("ver"); clearTimeout(tT); tT = setTimeout(() => t.classList.remove("ver"), 3800); }
+  function pintarHero() {
+    const ev = eventos().filter(e => e.estado === "aprobado"), vivos = ev.filter(e => estadoFecha(e) === "live").length, prox = ev.filter(e => ["today", "upcoming"].includes(estadoFecha(e))).length;
+    $("#hero-stats").innerHTML = "<div><b>" + vivos + "</b><small>en curso</small></div><div><b>" + prox + "</b><small>próximos</small></div><div><b>" + D.aulas.length + "</b><small>aulas</small></div>";
+  }
+  function refrescarTodo() { pintarSesion(); pintarNavegacion(); opcionesDestino(); prepararForm(); render(); renderManageList(); pintarAdmin(); pintarEventosMapa(); pintarBadge(); pintarHero(); if (seccionActual === "aulas") pintarAulas(); }
 
-  let tToast;
-  function toast(msg) { const t = $("#toast"); t.textContent = msg; t.classList.add("ver"); clearTimeout(tToast); tToast = setTimeout(() => t.classList.remove("ver"), 3800); }
-
-  function refrescarTodo() { pintarSesion(); pintarPanelOrg(); render(); pintarHorario(); pintarAvisos(); pintarBadge(); pintarAdmin(); }
-
-  // =====================================================================
-  // ARRANQUE: ?desde= &hasta= &evento= &modo= &asistir= &c=
-  // =====================================================================
-  dibujarCaminos();
+  // ---------- Arranque ----------
+  dibujarCaminos(); opcionesOrigen(); prepararFiltrosAulas(); pintarCampus();
   const q = new URLSearchParams(location.search);
-  $("#from").value = nodo(q.get("desde")) ? q.get("desde") : "entrada";
-  const evQ = q.get("evento") && evento(q.get("evento"));
-  const hasta = evQ ? evQ.lugar : q.get("hasta");
-  $("#to").value = nodo(hasta) ? hasta : "coliseo";
-  setModo(q.get("modo") || modoPreferido());
+  ponerOrigen(nodo(q.get("desde")) ? q.get("desde") : "entrada");
   refrescarTodo();
-  pintarPlano();
-  if (hasta && nodo(hasta)) { irA("map"); calcular(); } else irA("events");
-  if (MODO_APP && !q.get("desde")) pedirGPS(true);  // App instalada: usa el GPS automáticamente
-  $("#btn-gps").textContent = MODO_APP ? "📍 Usar mi ubicación (GPS)" : "📍 Usar mi ubicación (opcional)";
+  setModo(q.get("modo") || modoPreferido());
+  if (q.get("evento") && evento(q.get("evento"))) irEvento(q.get("evento"), q.get("modo"));
+  else if (q.get("hasta") && (aula(q.get("hasta")) || nodo(q.get("hasta")))) irLugar(q.get("hasta"), q.get("modo"));
+  else { $("#to").value = "ev:techmech"; if (!$("#to").value) $("#to").value = "coliseo"; irA("events"); }
+  if (MODO_APP && !q.get("desde")) pedirGPS(true);
   if (q.get("asistir")) { const id = q.get("asistir"), c = q.get("c") || ""; try { history.replaceState(null, "", urlBase()); } catch (e) {} marcarConCodigo(id, c); }
-  setInterval(() => { if (!$("#horario").classList.contains("hidden")) pintarHorario(); }, 60e3);
+  // Los eventos aparecen y desaparecen del mapa solos según su horario
+  setInterval(() => { pintarEventosMapa(); render(); pintarHero(); }, 60e3);
 })();

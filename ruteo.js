@@ -42,7 +42,7 @@
   // Distancia que se minimiza (decisión del equipo: ruta más corta en metros).
   // Ascensor: cuenta solo la altura que recorre.
   function distanciaArista(ar, desde, hasta) {
-    if (ar.tipo === "ascensor") return Math.abs((hasta.altura_m || 0) - (desde.altura_m || 0));
+    if (ar.tipo === "ascensor") return Math.abs((hasta.altura_m || 0) - (desde.altura_m || 0)) + 5; // +5: equivale a la espera
     return ar.metros;
   }
 
@@ -171,17 +171,17 @@
         while (j + 1 < tramos.length && tramos[j + 1].arista.tipo === "escalera" &&
                tramos[j + 1].hasta.bloque === t.desde.bloque) j++;
         const fin = tramos[j].hasta, pisos = fin.piso - t.desde.piso;
-        pasos.push({ icono: "🪜", texto: (pisos > 0 ? "Sube " : "Baja ") + Math.abs(pisos) +
+        pasos.push({ icono: "gradas", texto: (pisos > 0 ? "Sube " : "Baja ") + Math.abs(pisos) +
           (Math.abs(pisos) === 1 ? " piso" : " pisos") + " por las gradas hasta " + fin.nombre });
         i = j;
         continue;
       }
       const destino = t.hasta.nombre, nota = ar.nota ? " (" + ar.nota + ")" : "";
       const dh = (t.hasta.altura_m || 0) - (t.desde.altura_m || 0);
-      if (ar.tipo === "ascensor") pasos.push({ icono: "🛗", texto: "Toma el ascensor al piso " + t.hasta.piso + " · " + destino });
-      else if (ar.tipo === "escalera") pasos.push({ icono: "🪜", texto: (dh >= 0 ? "Sube" : "Baja") + " las gradas hasta " + destino + nota });
-      else if (ar.tipo === "rampa") pasos.push({ icono: "♿", texto: "Toma la rampa " + ar.metros + " m hasta " + destino + nota });
-      else pasos.push({ icono: "🚶", texto: "Camina " + ar.metros + " m hasta " + destino + (dh > 2 ? " (en subida)" : "") + nota });
+      if (ar.tipo === "ascensor") pasos.push({ icono: "ascensor", texto: "Toma el ascensor hasta " + destino });
+      else if (ar.tipo === "escalera") pasos.push({ icono: "gradas", texto: (dh >= 0 ? "Sube" : "Baja") + " las gradas hasta " + destino + nota });
+      else if (ar.tipo === "rampa") pasos.push({ icono: "rampa", texto: "Toma la rampa " + ar.metros + " m hasta " + destino + nota });
+      else pasos.push({ icono: "camino", texto: "Camina " + ar.metros + " m hasta " + destino + (dh > 2 ? " (en subida)" : "") + nota });
     }
     return pasos;
   }
